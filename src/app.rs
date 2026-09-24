@@ -1194,7 +1194,8 @@ impl App {
         }
         let col = (px - PAD) / cw;
         let row = (py - self.grid_top(gi) + g.scroll_y) / ch;
-        if col < 0 || col >= g.cols || row < 0 || row >= g.rows {
+        let c_rows = self.content_rows(gi);
+        if col < 0 || col >= g.cols || row < 0 || row >= c_rows {
             return None;
         }
         Some((row * g.cols + col) as usize)
@@ -1211,7 +1212,8 @@ impl App {
         }
         let col = (px - PAD) / cw;
         let row = (py - self.grid_top(gi) + g.scroll_y) / ch;
-        if col < 0 || col >= g.cols || row < 0 || row >= g.rows {
+        let c_rows = self.content_rows(gi);
+        if col < 0 || col >= g.cols || row < 0 || row >= c_rows {
             return None;
         }
         let inx = (px - PAD) % cw;

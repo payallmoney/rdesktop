@@ -453,9 +453,7 @@ impl App {
             for idx in 0..g.items.len() {
                 let col = (idx as i32) % g.cols;
                 let row = (idx as i32) / g.cols;
-                if row >= g.rows {
-                    break;
-                }
+                // 不截断:滚动后需绘制溢出行,由 PushAxisAlignedClip 裁剪可见区
                 let cx = (MARGIN + PAD + col * cw) as f32;
                 let sy = g.scroll_y as f32;
                 let cy = (MARGIN + self.grid_top(gi) + row * ch) as f32 - sy;
