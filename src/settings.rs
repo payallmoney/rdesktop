@@ -26,7 +26,7 @@ const IDC_OK: i32 = 207;
 const IDC_CANCEL: i32 = 208;
 const IDC_CGAP: i32 = 205; // 列间距
 const IDC_RGAP: i32 = 206; // 行间距
-const IDC_SHOWTITLE: i32 = 209; // 显示面板标题
+const IDC_SHOWTITLE: i32 = 209; // (已移除对话框勾选框,保留 ID 避免冲突)
 // 间距档位
 // 间距/圆角为直接输入的像素值(见 get_i32),按布局约束钳制:
 // 列0..48 / 行0..40(与 cell_w/h 的 clamp 一致),圆角0..64
@@ -504,20 +504,7 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
         IDC_RADIUS,
         font,
     );
-    // 显示面板标题
-    mk(
-        hwnd,
-        w!("BUTTON"),
-        "显示面板标题",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
-        WINDOW_EX_STYLE(0),
-        s(16),
-        s(82),
-        s(410),
-        s(24),
-        IDC_SHOWTITLE,
-        font,
-    );
+    // (全局「显示面板标题」已移除:每面板右键菜单和设置行内各自控制)
     // 自动整理
     mk(
         hwnd,
@@ -631,7 +618,7 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
     mk(
         hwnd,
         w!("STATIC"),
-        "每个面板:图层 / 显示面板 / 标题",
+        "每个面板:图层 / 显示 / 标题",
         WS_CHILD | WS_VISIBLE,
         WINDOW_EX_STYLE(0),
         s(16),
@@ -677,7 +664,7 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
         mk(
             hwnd,
             w!("BUTTON"),
-            "显示面板",
+            "显示",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
             WINDOW_EX_STYLE(0),
             s(300),
@@ -734,7 +721,6 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
     // 初值
     set_check(hwnd, IDC_FROST, app.settings.frosted);
     set_check(hwnd, IDC_TIDY, app.settings.auto_tidy);
-    set_check(hwnd, IDC_SHOWTITLE, app.settings.show_title);
     if let Some(cb) = cb_g {
         combo_add(cb, &GRID_LABELS);
         let idx = GRIDS.iter().position(|&g| g == app.settings.snap_grid).unwrap_or(0);
@@ -783,7 +769,7 @@ unsafe fn commit(app: &mut App, hwnd: HWND) {
         snap_grid: grid,
         col_gap,
         row_gap,
-        show_title: get_check(hwnd, IDC_SHOWTITLE),
+        show_title: true, // per-panel title_show 为唯一控制
     };
     // 每个面板的图层
     let mut z_top = vec![false; app.groups.len()];
@@ -803,11 +789,6 @@ unsafe fn commit(app: &mut App, hwnd: HWND) {
     let hide_changed = (0..n_g).any(|gi| app.groups[gi].hidden == p_show[gi]); // 隐藏!=显示
     let title_changed = (0..n_g).any(|gi| app.groups[gi].title_show != p_title[gi]);
 
-    if new.show_title != old.show_title {
-        for g in app.groups.iter_mut() {
-            g.title_show = new.show_title;
-        }
-    }
     app.settings = new.clone();
     for gi in 0..app.groups.len() {
         app.groups[gi].z_top = z_top[gi];

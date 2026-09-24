@@ -1,0 +1,107 @@
+// 应用双语支持:中文(默认)/ English
+use std::sync::atomic::{AtomicU8, Ordering};
+static LANG: AtomicU8 = AtomicU8::new(0);
+
+pub const LANG_ZH: u8 = 0;
+pub const LANG_EN: u8 = 1;
+
+pub fn set_lang(l: u8) { LANG.store(l, Ordering::SeqCst); }
+pub fn get_lang() -> u8 { LANG.load(Ordering::SeqCst) }
+pub fn is_en() -> bool { get_lang() == LANG_EN }
+
+pub fn detect_lang() -> u8 {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetUserDefaultUILanguage() -> u16;
+    }
+    let id = unsafe { GetUserDefaultUILanguage() };
+    if id & 0x3FF == 0x04 { LANG_ZH } else { LANG_EN }
+}
+
+pub fn t(key: &str) -> &'static str {
+    if is_en() { en(key) } else { zh(key) }
+}
+
+pub fn zh(key: &str) -> &'static str {
+    match key {
+        "settings" => "设置(&T)...",
+        "refresh" => "刷新桌面分组(&R)",
+        "show_panels" => "显示分组面板(&G)",
+        "show_sys_icons" => "显示系统桌面图标(&S)",
+        "autostart" => "开机自启动(&A)",
+        "exit" => "退出并恢复桌面(&X)",
+        "new_panel" => "新建面板(&N)...",
+        "rename_panel" => "重命名面板(&M)...",
+        "title_align" => "标题对齐(&A)",
+        "show_title" => "显示标题(&I)",
+        "hide_panel" => "隐藏面板(&H)",
+        "delete_panel" => "删除面板(&D)",
+        "show_panel" => "显示面板:",
+        "frosted" => "毛玻璃(面板背景模糊)",
+        "radius" => "圆角(px)",
+        "auto_tidy" => "自动整理(自动分组、按名称排序、桌面变化自动刷新)",
+        "grid_snap" => "对齐",
+        "col_gap" => "列间距(px)",
+        "row_gap" => "行间距(px)",
+        "per_panel_hdr" => "每个面板:图层 / 显示 / 标题",
+        "layer_low" => "最低层(桌面之上,不遮挡应用)",
+        "layer_high" => "最高层(置顶)",
+        "ok" => "确定",
+        "cancel" => "取消",
+        "rename_title" => "重命名面板",
+        "drag_hint" => "拖拽桌面图标到这里",
+        "grp_folders" => "文件夹",
+        "grp_files" => "文件",
+        "grp_shortcuts" => "快捷方式",
+        "grp_extras" => "其他快捷功能",
+        "new_panel_name" => "新面板",
+        _ => "",
+    }
+}
+
+pub fn en(key: &str) -> &'static str {
+    match key {
+        "settings" => "Settings(&T)...",
+        "refresh" => "Refresh desktop groups(&R)",
+        "show_panels" => "Show group panels(&G)",
+        "show_sys_icons" => "Show system desktop icons(&S)",
+        "autostart" => "Start on boot(&A)",
+        "exit" => "Exit & restore desktop(&X)",
+        "new_panel" => "New panel(&N)...",
+        "rename_panel" => "Rename panel(&M)...",
+        "title_align" => "Title alignment(&A)",
+        "show_title" => "Show title(&I)",
+        "hide_panel" => "Hide panel(&H)",
+        "delete_panel" => "Delete panel(&D)",
+        "show_panel" => "Show panel:",
+        "frosted" => "Frosted glass (DWM blur)",
+        "radius" => "Corner radius (px)",
+        "auto_tidy" => "Auto-tidy (group by type, sort by name, auto-refresh)",
+        "grid_snap" => "Grid snap",
+        "col_gap" => "Column gap (px)",
+        "row_gap" => "Row gap (px)",
+        "per_panel_hdr" => "Per panel: layer / show / title",
+        "layer_low" => "Low layer (above desktop, below apps)",
+        "layer_high" => "High layer (topmost)",
+        "ok" => "OK",
+        "cancel" => "Cancel",
+        "rename_title" => "Rename panel",
+        "drag_hint" => "Drag desktop icons here",
+        "grp_folders" => "Folders",
+        "grp_files" => "Files",
+        "grp_shortcuts" => "Shortcuts",
+        "grp_extras" => "Quick Actions",
+        "new_panel_name" => "New Panel",
+        _ => "",
+    }
+}
+
+pub fn group_title(gi: usize) -> &'static str {
+    match gi {
+        0 => t("grp_folders"),
+        1 => t("grp_files"),
+        2 => t("grp_shortcuts"),
+        3 => t("grp_extras"),
+        _ => t("new_panel_name"),
+    }
+}

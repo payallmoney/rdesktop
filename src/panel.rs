@@ -879,14 +879,19 @@ pub fn show_panel_menu(app: &mut App, gi: usize, hwnd: HWND, x: i32, y: i32) {
             return;
         }
         let Ok(menu) = CreatePopupMenu() else { return };
-        let _ = AppendMenuW(menu, MF_STRING, IDM_PNEW, w!("新建面板(&N)..."));
-        let _ = AppendMenuW(menu, MF_STRING, IDM_PRENAME + gi, w!("重命名面板(&M)..."));
+        let _ = AppendMenuW(menu, MF_STRING, IDM_PNEW, PCWSTR(ws(crate::lang::t("new_panel")).as_ptr()));
+        let _ = AppendMenuW(menu, MF_STRING, IDM_PRENAME + gi, PCWSTR(ws(crate::lang::t("rename_panel")).as_ptr()));
         let Ok(sub) = CreatePopupMenu() else {
             let _ = DestroyMenu(menu);
             return;
         };
         let cur = app.groups[gi].title_align;
-        for (i, label) in ["居左(&L)", "居中(&C)", "居右(&R)"].iter().enumerate() {
+        let align_labels = if crate::lang::is_en() {
+            ["Left(&L)", "Center(&C)", "Right(&R)"]
+        } else {
+            ["居左(&L)", "居中(&C)", "居右(&R)"]
+        };
+        for (i, label) in align_labels.iter().enumerate() {
             let f = if cur as usize == i {
                 MF_STRING | MF_CHECKED
             } else {
@@ -895,42 +900,42 @@ pub fn show_panel_menu(app: &mut App, gi: usize, hwnd: HWND, x: i32, y: i32) {
             let t = ws(label);
             let _ = AppendMenuW(sub, f, IDM_PALGN + gi * 4 + i, PCWSTR(t.as_ptr()));
         }
-        let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("标题对齐(&A)"));
+        let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, PCWSTR(ws(crate::lang::t("title_align")).as_ptr()));
         let ts = if app.groups[gi].title_show {
             MF_CHECKED
         } else {
             MF_UNCHECKED
         };
-        let _ = AppendMenuW(menu, MF_STRING | ts, IDM_PTITLE + gi, w!("显示标题(&I)"));
-        let _ = AppendMenuW(menu, MF_STRING, IDM_PHIDE + gi, w!("隐藏面板(&H)"));
+        let _ = AppendMenuW(menu, MF_STRING | ts, IDM_PTITLE + gi, PCWSTR(ws(crate::lang::t("show_title")).as_ptr()));
+        let _ = AppendMenuW(menu, MF_STRING, IDM_PHIDE + gi, PCWSTR(ws(crate::lang::t("hide_panel")).as_ptr()));
         if gi >= 4 {
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-            let _ = AppendMenuW(menu, MF_STRING, IDM_PDEL + gi, w!("删除面板(&D)"));
+            let _ = AppendMenuW(menu, MF_STRING, IDM_PDEL + gi, PCWSTR(ws(crate::lang::t("delete_panel")).as_ptr()));
         }
         // 应用级选项(与托盘菜单一致;选中后经 WM_COMMAND 统一分发)
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        let _ = AppendMenuW(menu, MF_STRING, IDM_SETTINGS, w!("设置(&T)..."));
-        let _ = AppendMenuW(menu, MF_STRING, IDM_REFRESH, w!("刷新桌面分组(&R)"));
+        let _ = AppendMenuW(menu, MF_STRING, IDM_SETTINGS, PCWSTR(ws(crate::lang::t("settings")).as_ptr()));
+        let _ = AppendMenuW(menu, MF_STRING, IDM_REFRESH, PCWSTR(ws(crate::lang::t("refresh")).as_ptr()));
         let vis = if app.groups_visible {
             MF_CHECKED
         } else {
             MF_UNCHECKED
         };
-        let _ = AppendMenuW(menu, MF_STRING | vis, IDM_TOGGLE_GROUPS, w!("显示分组面板(&G)"));
+        let _ = AppendMenuW(menu, MF_STRING | vis, IDM_TOGGLE_GROUPS, PCWSTR(ws(crate::lang::t("show_panels")).as_ptr()));
         let org = if app.show_original {
             MF_CHECKED
         } else {
             MF_UNCHECKED
         };
-        let _ = AppendMenuW(menu, MF_STRING | org, IDM_TOGGLE_ORIG, w!("显示系统桌面图标(&S)"));
+        let _ = AppendMenuW(menu, MF_STRING | org, IDM_TOGGLE_ORIG, PCWSTR(ws(crate::lang::t("show_sys_icons")).as_ptr()));
         let ar = if desktop::autorun_enabled() {
             MF_CHECKED
         } else {
             MF_UNCHECKED
         };
-        let _ = AppendMenuW(menu, MF_STRING | ar, IDM_AUTORUN, w!("开机自启动(&A)"));
+        let _ = AppendMenuW(menu, MF_STRING | ar, IDM_AUTORUN, PCWSTR(ws(crate::lang::t("autostart")).as_ptr()));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        let _ = AppendMenuW(menu, MF_STRING, IDM_EXIT, w!("退出并恢复桌面(&X)"));
+        let _ = AppendMenuW(menu, MF_STRING, IDM_EXIT, PCWSTR(ws(crate::lang::t("exit")).as_ptr()));
         keybd_alt();
         let _ = SetForegroundWindow(hwnd);
         let _ = TrackPopupMenu(menu, TPM_RIGHTBUTTON, x, y, Some(0), hwnd, None);
@@ -943,7 +948,7 @@ pub fn show_tray_menu(app: &mut App) {
     unsafe {
         let hwnd = app.groups[0].hwnd;
         let Ok(menu) = CreatePopupMenu() else { return };
-        let _ = AppendMenuW(menu, MF_STRING, IDM_SETTINGS, w!("设置(&T)..."));
+        let _ = AppendMenuW(menu, MF_STRING, IDM_SETTINGS, PCWSTR(ws(crate::lang::t("settings")).as_ptr()));
         let mut any_hidden = false;
         for (gi, g) in app.groups.iter().enumerate() {
             if g.hidden {
@@ -956,19 +961,19 @@ pub fn show_tray_menu(app: &mut App) {
             }
         }
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        let _ = AppendMenuW(menu, MF_STRING, IDM_REFRESH, w!("刷新桌面分组(&R)"));
+        let _ = AppendMenuW(menu, MF_STRING, IDM_REFRESH, PCWSTR(ws(crate::lang::t("refresh")).as_ptr()));
         let vis = if app.groups_visible { MF_CHECKED } else { MF_UNCHECKED };
-        let _ = AppendMenuW(menu, MF_STRING | vis, IDM_TOGGLE_GROUPS, w!("显示分组面板(&G)"));
+        let _ = AppendMenuW(menu, MF_STRING | vis, IDM_TOGGLE_GROUPS, PCWSTR(ws(crate::lang::t("show_panels")).as_ptr()));
         let org = if app.show_original { MF_CHECKED } else { MF_UNCHECKED };
-        let _ = AppendMenuW(menu, MF_STRING | org, IDM_TOGGLE_ORIG, w!("显示系统桌面图标(&S)"));
+        let _ = AppendMenuW(menu, MF_STRING | org, IDM_TOGGLE_ORIG, PCWSTR(ws(crate::lang::t("show_sys_icons")).as_ptr()));
         let ar = if desktop::autorun_enabled() {
             MF_CHECKED
         } else {
             MF_UNCHECKED
         };
-        let _ = AppendMenuW(menu, MF_STRING | ar, IDM_AUTORUN, w!("开机自启动(&A)"));
+        let _ = AppendMenuW(menu, MF_STRING | ar, IDM_AUTORUN, PCWSTR(ws(crate::lang::t("autostart")).as_ptr()));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        let _ = AppendMenuW(menu, MF_STRING, IDM_EXIT, w!("退出并恢复桌面(&X)"));
+        let _ = AppendMenuW(menu, MF_STRING, IDM_EXIT, PCWSTR(ws(crate::lang::t("exit")).as_ptr()));
 
         // 托盘菜单需要前台才能正确收起
         keybd_alt();

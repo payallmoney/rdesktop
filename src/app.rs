@@ -26,7 +26,10 @@ pub const RADIUS: f32 = 14.0; // 面板圆角半径
 pub const GAP: i32 = 16; // 面板间距
 pub const DRAG_THRESHOLD: i32 = 5;
 
-pub const GROUP_TITLES: [&str; 4] = ["文件夹", "文件", "快捷方式", "其他快捷功能"];
+pub fn group_titles() -> [&'static str; 4] {
+    [crate::lang::t("grp_folders"), crate::lang::t("grp_files"),
+     crate::lang::t("grp_shortcuts"), crate::lang::t("grp_extras")]
+}
 
 // 托盘 / 菜单 ID
 pub const WM_TRAY: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 1;
@@ -492,7 +495,7 @@ impl App {
             let config_path = cfg_dir.join("config.cfg");
 
             let empty_groups: [Group; 4] = std::array::from_fn(|i| Group {
-                title: GROUP_TITLES[i].to_string(),
+                title: group_titles()[i].to_string(),
                 title_align: 1,
                 items: Vec::new(),
                 hwnd: HWND::default(),

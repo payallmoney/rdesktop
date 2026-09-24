@@ -427,7 +427,7 @@ impl App {
                     &rt,
                     &self.dwrite,
                     &self.fmt_hint,
-                    "拖拽桌面图标到这里",
+                    crate::lang::t("drag_hint"),
                     (MARGIN + PAD) as f32,
                     (MARGIN + self.grid_top(gi) + 20) as f32,
                     (g.panel_w - 2 * PAD) as f32,

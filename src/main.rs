@@ -6,6 +6,7 @@
 mod app;
 mod desktop;
 mod panel;
+mod lang;
 mod regstore;
 mod render;
 mod settings;
@@ -47,6 +48,7 @@ fn dlog(msg: &str) {
 }
 
 fn main() {
+    crate::lang::set_lang(crate::lang::detect_lang());
     // 崩溃兜底:无论如何都把系统桌面图标放回来,并记录 panic 位置
     std::panic::set_hook(Box::new(|info| {
         use std::io::Write;
