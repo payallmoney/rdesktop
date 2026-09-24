@@ -557,17 +557,19 @@ pub fn ensure_z_order(app: &App) {
                     let n = FAIL_CNT.fetch_add(1, Ordering::SeqCst) + 1;
                     if n == 4 {
                         dlog(&format!(
-                            "z ESCAPE: same fail pattern x{n}, scatter+rebuild clu={:?}",
+                            "z ESCAPE: same fail pattern x{n}, scatter-bottom+rebuild clu={:?}",
                             a.cluster
                         ));
-                        for &gi in &want {
+                        // HWND_BOTTOM(而非 HWND_TOP):散到底再由重建拉起,
+                        // 不会短暂盖住新打开的窗口
+                        for &gi in want.iter().rev() {
                             let hw = app.groups[gi].hwnd;
                             if hw.is_invalid() {
                                 continue;
                             }
                             let _ = SetWindowPos(
                                 hw,
-                                Some(HWND_TOP),
+                                Some(HWND_BOTTOM),
                                 0,
                                 0,
                                 0,
@@ -1638,13 +1640,20 @@ unsafe extern "system" fn panel_wndproc(
                 }
                 return LRESULT(0);
             }
+            if wparam.0 == 8 {
+                // 延迟重渲染:Win+D/隐藏恢复后重提交所有面板 ULW 像素
+                let _ = KillTimer(Some(hwnd), 8);
+                app.render_all();
+                return LRESULT(0);
+            }
             if wparam.0 == TIMER_ZORDER {
                 // 兜底:若仍被最小化(某些 ShowDesktop 路径),立即还原
                 for gi2 in 0..app.groups.len() {
                     let hw2 = app.groups[gi2].hwnd;
                     if !hw2.is_invalid() && IsIconic(hw2).as_bool() {
                         let _ = ShowWindow(hw2, SW_RESTORE);
-                        dlog("timer IsIconic -> SW_RESTORE");
+                        app.render_panel(gi2);
+                        dlog("timer IsIconic -> SW_RESTORE + render");
                     }
                 }
                 // 保持桌面图标隐藏(explore 重启自愈)+ z序(测试可暂停)
@@ -1730,7 +1739,7 @@ unsafe extern "system" fn panel_wndproc(
                 if sp.x < r.left || sp.x >= r.right || sp.y < r.top || sp.y >= r.bottom {
                     continue;
                 }
-                let dy = delta * app.cell_h() / 120;
+                let dy = -(delta) * app.cell_h() / 120; // 滚轮向下=正方向(显示下方内容)
                 let max = app.max_scroll(gi);
                 let new = (app.groups[gi].scroll_y + dy).clamp(0, max);
                 if new != app.groups[gi].scroll_y {
@@ -1823,6 +1832,8 @@ unsafe extern "system" fn panel_wndproc(
                     if app.groups_visible {
                         app.render_all();
                         ensure_z_order(app);
+                        // Win+D 恢复后 ULW 表面可能被清,延迟重提交
+                        let _ = SetTimer(Some(hwnd), 8, 200, None);
                     }
                 }
                 IDM_TOGGLE_ORIG => {

@@ -631,7 +631,7 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
     mk(
         hwnd,
         w!("STATIC"),
-        "每个面板:图层 / 隐藏 / 标题",
+        "每个面板:图层 / 显示面板 / 标题",
         WS_CHILD | WS_VISIBLE,
         WINDOW_EX_STYLE(0),
         s(16),
@@ -677,12 +677,12 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
         mk(
             hwnd,
             w!("BUTTON"),
-            "隐藏",
+            "显示面板",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
             WINDOW_EX_STYLE(0),
             s(300),
             s(302 + gi as i32 * 36),
-            s(56),
+            s(64),
             s(22),
             IDC_PHIDE + gi as i32,
             font,
@@ -700,7 +700,7 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
             IDC_PTSHOW + gi as i32,
             font,
         );
-        set_check(hwnd, IDC_PHIDE + gi as i32, app.groups[gi].hidden);
+        set_check(hwnd, IDC_PHIDE + gi as i32, !app.groups[gi].hidden); // 勾=显示面板
         set_check(hwnd, IDC_PTSHOW + gi as i32, app.groups[gi].title_show);
     }
     // 按钮
@@ -794,13 +794,13 @@ unsafe fn commit(app: &mut App, hwnd: HWND) {
     }
     let z_changed = (0..app.groups.len()).any(|gi| app.groups[gi].z_top != z_top[gi]);
     let n_g = app.groups.len();
-    let mut p_hide = vec![false; n_g];
+    let mut p_show = vec![true; n_g];
     let mut p_title = vec![false; n_g];
     for gi in 0..n_g {
-        p_hide[gi] = get_check(hwnd, IDC_PHIDE + gi as i32);
+        p_show[gi] = get_check(hwnd, IDC_PHIDE + gi as i32);   // 勾=显示
         p_title[gi] = get_check(hwnd, IDC_PTSHOW + gi as i32);
     }
-    let hide_changed = (0..n_g).any(|gi| app.groups[gi].hidden != p_hide[gi]);
+    let hide_changed = (0..n_g).any(|gi| app.groups[gi].hidden == p_show[gi]); // 隐藏!=显示
     let title_changed = (0..n_g).any(|gi| app.groups[gi].title_show != p_title[gi]);
 
     if new.show_title != old.show_title {
@@ -813,17 +813,18 @@ unsafe fn commit(app: &mut App, hwnd: HWND) {
         app.groups[gi].z_top = z_top[gi];
     }
     for gi in 0..n_g {
-        // 隐藏开关:立即生效
-        if app.groups[gi].hidden != p_hide[gi] {
-            app.groups[gi].hidden = p_hide[gi];
-            if let h = app.groups[gi].hwnd {
-                if !h.is_invalid() {
-                    if p_hide[gi] {
-                        let _ = ShowWindow(h, SW_HIDE);
-                    } else if app.groups_visible {
+        // 显示开关:应用(hidden = 非勾选)
+        if app.groups[gi].hidden == p_show[gi] {
+            app.groups[gi].hidden = !p_show[gi];
+            let h = app.groups[gi].hwnd;
+            if !h.is_invalid() {
+                if p_show[gi] {
+                    if app.groups_visible {
                         let _ = ShowWindow(h, SW_RESTORE);
                         app.render_panel(gi);
                     }
+                } else {
+                    let _ = ShowWindow(h, SW_HIDE);
                 }
             }
         }
@@ -944,23 +945,27 @@ unsafe extern "system" fn settings_wndproc(
                     x if (IDC_PHIDE..IDC_PHIDE + 100).contains(&x) => {
                         let gi = (x - IDC_PHIDE) as usize;
                         if gi < app.groups.len() {
-                            let on = get_check(hwnd, x);
-                            if app.groups[gi].hidden != on {
-                                app.groups[gi].hidden = on;
+                            let show = get_check(hwnd, x); // 勾=显示面板
+                            if app.groups[gi].hidden == show {
+                                app.groups[gi].hidden = !show;
                                 let h = app.groups[gi].hwnd;
                                 if !h.is_invalid() {
-                                    if on {
+                                    if show {
+                                        if app.groups_visible {
+                                            let _ = ShowWindow(h, SW_RESTORE);
+                                            app.render_panel(gi);
+                                        }
+                                    } else {
                                         let _ = ShowWindow(h, SW_HIDE);
-                                    } else if app.groups_visible {
-                                        let _ = ShowWindow(h, SW_RESTORE);
-                                        app.render_panel(gi);
                                     }
                                 }
                                 app.save_config();
-                                if !on {
+                                if !show {
                                     crate::panel::ensure_z_order(app);
                                 }
-                                crate::panel::dlog(&format!("settings: panel hide gi={gi} -> {on}"));
+                                crate::panel::dlog(&format!(
+                                    "settings: panel show gi={gi} -> {show}"
+                                ));
                             }
                         }
                     }
