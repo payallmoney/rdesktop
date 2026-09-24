@@ -32,7 +32,7 @@ const IDC_SHOWTITLE: i32 = 209; // 显示面板标题
 // 列0..48 / 行0..40(与 cell_w/h 的 clamp 一致),圆角0..64
 const IDC_Z0: i32 = 211; // 图层选择,IDC_Z0 + 组号(0..3)
 const IDC_PHIDE: i32 = 240; // 每面板隐藏勾选:240+gi
-const IDC_PTSHOW: i32 = 250; // 每面板显示标题勾选:250+gi
+const IDC_PTSHOW: i32 = 350; // 每面板显示标题勾选:350+gi(避开 PHIDE 区间 240..340)
 
 // 圆角档位 / 对齐网格档位(与下拉顺序一一对应)
 const GRIDS: [i32; 4] = [0, 8, 16, 32];
@@ -938,6 +938,44 @@ unsafe extern "system" fn settings_wndproc(
                     }
                     IDC_CANCEL => {
                         let _ = DestroyWindow(hwnd);
+                    }
+                    // 每面板「隐藏」「标题」勾选:点击立即生效并保存
+                    // (不必依赖“确定”;点 X 关闭同样已生效)
+                    x if (IDC_PHIDE..IDC_PHIDE + 100).contains(&x) => {
+                        let gi = (x - IDC_PHIDE) as usize;
+                        if gi < app.groups.len() {
+                            let on = get_check(hwnd, x);
+                            if app.groups[gi].hidden != on {
+                                app.groups[gi].hidden = on;
+                                let h = app.groups[gi].hwnd;
+                                if !h.is_invalid() {
+                                    if on {
+                                        let _ = ShowWindow(h, SW_HIDE);
+                                    } else if app.groups_visible {
+                                        let _ = ShowWindow(h, SW_RESTORE);
+                                        app.render_panel(gi);
+                                    }
+                                }
+                                app.save_config();
+                                if !on {
+                                    crate::panel::ensure_z_order(app);
+                                }
+                                crate::panel::dlog(&format!("settings: panel hide gi={gi} -> {on}"));
+                            }
+                        }
+                    }
+                    x if (IDC_PTSHOW..IDC_PTSHOW + 100).contains(&x) => {
+                        let gi = (x - IDC_PTSHOW) as usize;
+                        if gi < app.groups.len() {
+                            let on = get_check(hwnd, x);
+                            if app.groups[gi].title_show != on {
+                                app.groups[gi].title_show = on;
+                                app.save_config();
+                                app.place_groups();
+                                app.render_all();
+                                crate::panel::dlog(&format!("settings: panel title gi={gi} -> {on}"));
+                            }
+                        }
                     }
                     _ => {}
                 }
