@@ -16,9 +16,10 @@ use windows::Win32::Graphics::Gdi::{ClientToScreen, ScreenToClient};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::app::{
-    ws, App, IDM_EXIT, IDM_OPEN, IDM_REFRESH, IDM_SETTINGS, IDM_TOGGLE_GROUPS,
-    IDM_TOGGLE_ORIG, BOTTOM_PAD, GRID_TOP, ICON_SZ, ICON_TOP, MARGIN, PAD, TIMER_ZORDER, TITLE_H,
-    HOVER_TITLE, IDM_PDEL, IDM_PALGN, IDM_PNEW, IDM_PRENAME, WM_OPEN_SETTINGS, WM_TRAY, WM_Z_PAUSE, WM_Z_REZ, DRAG_THRESHOLD,
+    ws, App, IDM_AUTORUN, IDM_EXIT, IDM_OPEN, IDM_REFRESH, IDM_SETTINGS, IDM_TOGGLE_GROUPS,
+    IDM_TOGGLE_ORIG, BOTTOM_PAD, ICON_SZ, ICON_TOP, MARGIN, PAD, TIMER_ZORDER,
+    HOVER_TITLE, IDM_PHIDE, IDM_PDEL, IDM_PALGN, IDM_PNEW, IDM_PRENAME, IDM_PSHOW, IDM_PTITLE,
+    WM_OPEN_SETTINGS, WM_TRAY, WM_Z_PAUSE, WM_Z_REZ, DRAG_THRESHOLD,
 };
 use crate::desktop;
 
@@ -186,7 +187,11 @@ pub fn create_panel_window(app: &mut App, gi: usize, hinst: windows::Win32::Foun
         match hwnd {
             Ok(h) => {
                 app.groups[gi].hwnd = h;
-                let _ = ShowWindow(h, SW_SHOWNOACTIVATE);
+                if app.groups[gi].hidden {
+                    let _ = ShowWindow(h, SW_HIDE);
+                } else {
+                    let _ = ShowWindow(h, SW_SHOWNOACTIVATE);
+                }
             }
             Err(_) => app.groups[gi].hwnd = HWND::default(),
         }
@@ -344,10 +349,15 @@ fn edge_zone(gi: usize, app: &App, x: i32, y: i32) -> u32 {
         return 0;
     }
     // 热区贴可见圆角边缘:从窗口最外缘一直覆盖到面板边框再往内 EDGE 像素
-    // (对齐到 MARGIN 处的可见轮廓,原实现落在阴影带里难以发现)
+    // (对齐到 MARGIN 处的可见轮廓,原实现落在阴影带里难以发现)。
+    // 标题隐藏时顶部只保留阴影带作缩放热区,把细拖动条(14px)让给移动。
     let on_l = x <= MARGIN + EDGE;
     let on_r = x >= cw - MARGIN - EDGE;
-    let on_t = y <= MARGIN + EDGE;
+    let on_t = if app.settings.show_title {
+        y <= MARGIN + EDGE
+    } else {
+        y <= EDGE
+    };
     let on_b = y >= chh - MARGIN - EDGE;
     if !(on_l || on_r || on_t || on_b) {
         return 0;
@@ -398,7 +408,7 @@ fn do_resize(app: &mut App, hwnd: HWND, p: POINT) {
     rs.start_px = sp.x;
     rs.start_py = sp.y;
     let min_w = (2 * PAD + app.cell_w()) + 2 * MARGIN;
-    let min_h = (GRID_TOP + app.cell_h() + BOTTOM_PAD) + 2 * MARGIN;
+    let min_h = (app.grid_top(rs.gi) + app.cell_h() + BOTTOM_PAD) + 2 * MARGIN;
     let (l0, t0, r0, b0) = (rs.win_l, rs.win_t, rs.win_r, rs.win_b);
     let (mut l, mut t, mut r, mut b) = (l0, t0, r0, b0);
     if zone == HTLEFT || zone == HTTOPLEFT || zone == HTBOTTOMLEFT {
@@ -455,11 +465,16 @@ pub fn ensure_z_order(app: &App) {
         // 以前每次重跑“倒序插到锚点下”都会挪动4个面板,触发 REORDER → WM_Z_REZ
         // → 再 ensure,形成永不收敛的自激循环,真实 Win+D 事件被防抖丢弃。
         let a = walk_anchor(app);
+        // 已隐藏面板:窗口不可见、不参与簇期望(否则 cluster 永远对不上 → 空转重建)
         let low: Vec<usize> = (0..app.groups.len())
-            .filter(|&gi| !app.groups[gi].z_top && !app.groups[gi].hwnd.is_invalid())
+            .filter(|&gi| {
+                !app.groups[gi].z_top && !app.groups[gi].hidden && !app.groups[gi].hwnd.is_invalid()
+            })
             .collect();
+        // 期望叠放序:用户偏好(点标题提层)优先,未记录的按组号补在末尾
+        let want = app.want_order(&low);
         let cluster_ok =
-            a.shell.is_some() && !a.displaced && a.cluster == low;
+            a.shell.is_some() && !a.displaced && a.cluster == want;
         let mut acted = false;
         if !cluster_ok {
             let (pv, pc, pt) = match a.prev {
@@ -474,22 +489,19 @@ pub fn ensure_z_order(app: &App) {
                 None => ("none".into(), "-".into(), false),
             };
             dlog(&format!(
-                "EN disp={} low={:?} clu={:?} prev={pv}({pc}) prev_top={pt} pn={} fn={} sn={}",
-                a.displaced, low, a.cluster, a.prev_n, a.first_panel_n, a.shell_n
+                "EN disp={} want={:?} clu={:?} prev={pv}({pc}) prev_top={pt} pn={} fn={} sn={}",
+                a.displaced, want, a.cluster, a.prev_n, a.first_panel_n, a.shell_n
             ));
         }
-        // 倒序插入:先插 gi{n-1} …最后插 gi0 -> gi0 位于面板簇最顶端,
-        // 与 shell/壁纸层距离最远(sink+定时器宿主最不容易被压住)
-        for gi in (0..app.groups.len()).rev() {
+        // 顶层带:需要置顶的提升;被外部置顶的低层面板取消置顶(位置统一在下方处理)
+        for gi in 0..app.groups.len() {
             let hw = app.groups[gi].hwnd;
-            if hw.is_invalid() {
+            if hw.is_invalid() || app.groups[gi].hidden {
                 continue;
             }
-            let want_top = app.groups[gi].z_top;
             let ex = GetWindowLongPtrW(hw, GWL_EXSTYLE);
             let is_top = ex & (WS_EX_TOPMOST.0 as isize) != 0;
-            if want_top {
-                // 最高层:置顶(高于所有普通应用);已是置顶则不动
+            if app.groups[gi].z_top {
                 if !is_top {
                     let r = SetWindowPos(
                         hw,
@@ -508,37 +520,91 @@ pub fn ensure_z_order(app: &App) {
                         Err(e) => dlog(&format!("promote gi={gi} ERR {e}")),
                     }
                 }
-            } else {
-                if a.shell.is_none() || cluster_ok {
-                    continue; // 锚点缺失不动;簇已贴锚且顺序正确不动(幂等)
+            } else if is_top {
+                let r = SetWindowPos(
+                    hw,
+                    Some(HWND_NOTOPMOST),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                );
+                match r {
+                    Ok(_) => dlog(&format!("demote gi={gi} OK")),
+                    Err(e) => dlog(&format!("demote gi={gi} ERR {e}")),
                 }
-                // 最低层:先取消置顶(必要时),再插到锚点之下。
-                // 锚点 = 最低的普通应用窗口;纯桌面时直接贴在桌面窗之下。
-                if is_top {
-                    let r = SetWindowPos(
-                        hw,
-                        Some(HWND_NOTOPMOST),
-                        0,
-                        0,
-                        0,
-                        0,
-                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                    );
-                    match r {
-                        Ok(_) => dlog(&format!("demote gi={gi} OK")),
-                        Err(e) => dlog(&format!("demote gi={gi} ERR {e}")),
+            }
+        }
+        // 低层重插:按用户偏好序(want)自顶向下链式插入 —— 最上层最先归位。
+        // 簇已正确时完全不动(幂等)。锚点回退链:黑名单与 TOPMOST 带窗跳过
+        // (跨带插入只会落在普通带顶端,形成无效定点)。
+        if a.shell.is_some() && !cluster_ok {
+            // 死锁逃逸:同一失败形态连续出现 → 先散开(全部 HWND_TOP)再重建,
+            // 打破"插入成功但落点不变"的定点(快速 Win+D 后出现过)
+            {
+                use std::sync::atomic::{AtomicU32, Ordering};
+                static LAST_PAT: AtomicU32 = AtomicU32::new(u32::MAX);
+                static FAIL_CNT: AtomicU32 = AtomicU32::new(0);
+                let pat = {
+                    let mut v: u32 = 0;
+                    for &g in &a.cluster {
+                        v = v.wrapping_mul(31).wrapping_add(g as u32 + 1);
                     }
+                    v
+                };
+                if LAST_PAT.swap(pat, Ordering::SeqCst) == pat {
+                    let n = FAIL_CNT.fetch_add(1, Ordering::SeqCst) + 1;
+                    if n == 4 {
+                        dlog(&format!(
+                            "z ESCAPE: same fail pattern x{n}, scatter+rebuild clu={:?}",
+                            a.cluster
+                        ));
+                        for &gi in &want {
+                            let hw = app.groups[gi].hwnd;
+                            if hw.is_invalid() {
+                                continue;
+                            }
+                            let _ = SetWindowPos(
+                                hw,
+                                Some(HWND_TOP),
+                                0,
+                                0,
+                                0,
+                                0,
+                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                            );
+                        }
+                        FAIL_CNT.store(0, Ordering::SeqCst);
+                    }
+                } else {
+                    FAIL_CNT.store(0, Ordering::SeqCst);
                 }
-                // 锚点回退链:从最低(prev)向上逐个尝试。被系统拒绝的锚点
-                // (E_ACCESSDENIED,如受保护/提权进程的窗口)进黑名单,下次直接跳过。
+            }
+            let mut after: Option<HWND> = None;
+            for &gi in want.iter() {
+                let hw = app.groups[gi].hwnd;
+                if hw.is_invalid() {
+                    continue;
+                }
                 let mut done = false;
-                for (k, cand) in a.chain.iter().rev().enumerate() {
-                    if anchor_denied(*cand) {
+                let mut cands: Vec<Option<HWND>> = Vec::new();
+                if let Some(h) = after {
+                    cands.push(Some(h));
+                }
+                // 回退链:低→高;非 TOPMOST 才作为插入锚(末尾兜底 HWND_TOP)
+                for cand in a.chain.iter().rev() {
+                    let ex = GetWindowLongPtrW(*cand, GWL_EXSTYLE);
+                    if ex & (WS_EX_TOPMOST.0 as isize) != 0 || anchor_denied(*cand) {
                         continue;
                     }
+                    cands.push(Some(*cand));
+                }
+                cands.push(Some(HWND_TOP));
+                for (k, cand) in cands.iter().enumerate() {
                     let r = SetWindowPos(
                         hw,
-                        Some(*cand),
+                        *cand,
                         0,
                         0,
                         0,
@@ -549,27 +615,36 @@ pub fn ensure_z_order(app: &App) {
                         Ok(_) => {
                             acted = true;
                             done = true;
+                            after = Some(hw);
                             if k > 0 {
                                 dlog(&format!(
-                                    "  ins gi={gi} via fb[{k}] after=0x{:x}",
-                                    cand.0 as usize
+                                    "  ins gi={gi} via fb[{k}] after={:?}",
+                                    cand.map(|h| h.0 as usize)
                                 ));
                             } else {
-                                dlog(&format!("  ins gi={gi} after=0x{:x}", cand.0 as usize));
+                                dlog(&format!(
+                                    "  ins gi={gi} after={:?}",
+                                    cand.map(|h| h.0 as usize)
+                                ));
                             }
                             break;
                         }
                         Err(e) => {
-                            anchor_mark_denied(*cand);
+                            if let Some(h) = cand {
+                                anchor_mark_denied(*h);
+                            }
                             dlog(&format!(
-                                "anchor deny gi={gi} after=0x{:x}: {e}",
-                                cand.0 as usize
+                                "anchor deny gi={gi} after={:?}: {e}",
+                                cand.map(|h| h.0 as usize)
                             ));
                         }
                     }
                 }
                 if !done {
-                    dlog(&format!("ins gi={gi} no usable anchor (chain={})", a.chain.len()));
+                    dlog(&format!(
+                        "ins gi={gi} no usable anchor (chain={})",
+                        a.chain.len()
+                    ));
                 }
             }
         }
@@ -732,8 +807,19 @@ unsafe fn end_drag(app: &mut App) {
         if let (Some(s), Some(t), Some((gs, idx))) = (src, target, down) {
             dlog(&format!("DROP s={s} t={t} idx={idx}"));
             if s == gs && t != s {
-                app.move_item(s, idx, t);
-                app.selected = None;
+                let mut moving = app.sel_items(s);
+                if !moving.contains(&idx) {
+                    moving.push(idx);
+                    moving.sort_unstable();
+                }
+                if moving.len() <= 1 {
+                    app.move_item(s, idx, t);
+                } else {
+                    for &i in moving.iter().rev() {
+                        app.move_item(s, i, t);
+                    }
+                }
+                app.clear_sel();
             } else if s == gs {
                 // 组内:插入到落点格(手动排序/调换位置)
                 if let Some(cell) = hover_cell {
@@ -789,10 +875,41 @@ pub fn show_panel_menu(app: &mut App, gi: usize, hwnd: HWND, x: i32, y: i32) {
             let _ = AppendMenuW(sub, f, IDM_PALGN + gi * 4 + i, PCWSTR(t.as_ptr()));
         }
         let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("标题对齐(&A)"));
+        let ts = if app.groups[gi].title_show {
+            MF_CHECKED
+        } else {
+            MF_UNCHECKED
+        };
+        let _ = AppendMenuW(menu, MF_STRING | ts, IDM_PTITLE + gi, w!("显示标题(&I)"));
+        let _ = AppendMenuW(menu, MF_STRING, IDM_PHIDE + gi, w!("隐藏面板(&H)"));
         if gi >= 4 {
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-            let _ = AppendMenuW(menu, MF_STRING, IDM_PDEL + gi, w!("关闭面板(&C)"));
+            let _ = AppendMenuW(menu, MF_STRING, IDM_PDEL + gi, w!("删除面板(&D)"));
         }
+        // 应用级选项(与托盘菜单一致;选中后经 WM_COMMAND 统一分发)
+        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+        let _ = AppendMenuW(menu, MF_STRING, IDM_SETTINGS, w!("设置(&T)..."));
+        let _ = AppendMenuW(menu, MF_STRING, IDM_REFRESH, w!("刷新桌面分组(&R)"));
+        let vis = if app.groups_visible {
+            MF_CHECKED
+        } else {
+            MF_UNCHECKED
+        };
+        let _ = AppendMenuW(menu, MF_STRING | vis, IDM_TOGGLE_GROUPS, w!("显示分组面板(&G)"));
+        let org = if app.show_original {
+            MF_CHECKED
+        } else {
+            MF_UNCHECKED
+        };
+        let _ = AppendMenuW(menu, MF_STRING | org, IDM_TOGGLE_ORIG, w!("显示系统桌面图标(&S)"));
+        let ar = if desktop::autorun_enabled() {
+            MF_CHECKED
+        } else {
+            MF_UNCHECKED
+        };
+        let _ = AppendMenuW(menu, MF_STRING | ar, IDM_AUTORUN, w!("开机自启动(&A)"));
+        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+        let _ = AppendMenuW(menu, MF_STRING, IDM_EXIT, w!("退出并恢复桌面(&X)"));
         keybd_alt();
         let _ = SetForegroundWindow(hwnd);
         let _ = TrackPopupMenu(menu, TPM_RIGHTBUTTON, x, y, Some(0), hwnd, None);
@@ -806,12 +923,29 @@ pub fn show_tray_menu(app: &mut App) {
         let hwnd = app.groups[0].hwnd;
         let Ok(menu) = CreatePopupMenu() else { return };
         let _ = AppendMenuW(menu, MF_STRING, IDM_SETTINGS, w!("设置(&T)..."));
+        let mut any_hidden = false;
+        for (gi, g) in app.groups.iter().enumerate() {
+            if g.hidden {
+                if !any_hidden {
+                    let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+                    any_hidden = true;
+                }
+                let t = ws(&format!("显示面板:{}", g.title));
+                let _ = AppendMenuW(menu, MF_STRING, IDM_PSHOW + gi, PCWSTR(t.as_ptr()));
+            }
+        }
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         let _ = AppendMenuW(menu, MF_STRING, IDM_REFRESH, w!("刷新桌面分组(&R)"));
         let vis = if app.groups_visible { MF_CHECKED } else { MF_UNCHECKED };
         let _ = AppendMenuW(menu, MF_STRING | vis, IDM_TOGGLE_GROUPS, w!("显示分组面板(&G)"));
         let org = if app.show_original { MF_CHECKED } else { MF_UNCHECKED };
         let _ = AppendMenuW(menu, MF_STRING | org, IDM_TOGGLE_ORIG, w!("显示系统桌面图标(&S)"));
+        let ar = if desktop::autorun_enabled() {
+            MF_CHECKED
+        } else {
+            MF_UNCHECKED
+        };
+        let _ = AppendMenuW(menu, MF_STRING | ar, IDM_AUTORUN, w!("开机自启动(&A)"));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         let _ = AppendMenuW(menu, MF_STRING, IDM_EXIT, w!("退出并恢复桌面(&X)"));
 
@@ -833,39 +967,9 @@ pub fn show_tray_menu(app: &mut App) {
         let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
         let _ = DestroyMenu(menu);
 
-        match cmd {
-            IDM_SETTINGS => {
-                let _ = PostMessageW(Some(hwnd), WM_OPEN_SETTINGS, WPARAM(0), LPARAM(0));
-            }
-            IDM_REFRESH => app.refresh_from_disk(),
-            IDM_TOGGLE_GROUPS => {
-                app.groups_visible = !app.groups_visible;
-                for gi in 0..app.groups.len() {
-                    if !app.groups[gi].hwnd.is_invalid() {
-                        let sw = if app.groups_visible { SW_RESTORE } else { SW_HIDE };
-                        let _ = ShowWindow(app.groups[gi].hwnd, sw);
-                    }
-                }
-                if app.groups_visible {
-                    app.render_all();
-                    ensure_z_order(app);
-                }
-            }
-            IDM_TOGGLE_ORIG => {
-                app.show_original = !app.show_original;
-                if app.show_original {
-                    if !app.desktop_lv.is_invalid() {
-                        desktop::show_listview(app.desktop_lv);
-                    }
-                } else if !app.desktop_lv.is_invalid() {
-                    desktop::hide_listview(app.desktop_lv);
-                }
-            }
-            IDM_EXIT => {
-                PostQuitMessage(0);
-            }
-            _ => {}
-        }
+        // 选中项统一转成 WM_COMMAND,由窗口过程分发(菜单内不做业务,
+        // 也让命令路径可被直接驱动)
+        let _ = PostMessageW(Some(hwnd), WM_COMMAND, WPARAM(cmd), LPARAM(0));
     }
 }
 
@@ -947,7 +1051,8 @@ unsafe extern "system" fn panel_wndproc(
     let app = &mut *app_ptr;
 
     match msg {
-        WM_NCCREATE => return LRESULT(1),
+        // 转发 DefWindowProc:窗口文本在此步存入(否则标题永远为空)
+        WM_NCCREATE => return DefWindowProcW(hwnd, msg, wparam, lparam),
 
         WM_PAINT => {
             let _ = ValidateRect(Some(hwnd), None);
@@ -972,6 +1077,7 @@ unsafe extern "system" fn panel_wndproc(
                 (g.panel_w, g.panel_h)
             };
             // 客户区原点 = 面板左上角 - MARGIN
+            let th = app.title_h(gi);
             let px = p.x - MARGIN;
             let py = p.y - MARGIN;
             // 1) 边缘/角落 = 缩放热区(自实现拖拽,不走系统 sizing 循环)
@@ -987,7 +1093,7 @@ unsafe extern "system" fn panel_wndproc(
                 return LRESULT(HTCLIENT as isize);
             }
             if px >= 0 && py >= 0 && px < pw && py < ph {
-                if py < TITLE_H {
+                if py < th {
                     // 标题栏 = 移动热区(光标由 WM_SETCURSOR 统一给出)
                     if app.hover != HOVER_TITLE {
                         dlog("hover -> TITLE");
@@ -1084,11 +1190,12 @@ unsafe extern "system" fn panel_wndproc(
                 // b) 点击标题:提层 + 开始自实现移动(不走系统 HTCAPTION 模态循环,
                 //    避免与 WS_EX_NOACTIVATE / 定时器 SetWindowPos 干涉导致"拖不动")
                 let mut title_started = false;
+                let th = app.title_h(gi);
                 {
                     let g = &app.groups[gi];
                     let px = p.x - MARGIN;
                     let py = p.y - MARGIN;
-                    if px >= 0 && py >= 0 && px < g.panel_w && py < TITLE_H {
+                    if px >= 0 && py >= 0 && px < g.panel_w && py < th {
                         title_started = true;
                         let exv = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
                         if exv & (WS_EX_TOPMOST.0 as isize) != 0 {
@@ -1113,6 +1220,9 @@ unsafe extern "system" fn panel_wndproc(
                                 0,
                                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
                             );
+                            // 记住叠放偏好:纠偏时保序,否则会被升序重建压回
+                            app.raise_pref(gi);
+                            dlog(&format!("title raise gi={gi} pref={:?}", app.z_pref));
                         }
                         let mut wr = RECT::default();
                         let _ = GetWindowRect(hwnd, &mut wr);
@@ -1131,6 +1241,30 @@ unsafe extern "system" fn panel_wndproc(
                 if title_started {
                     return LRESULT(0);
                 }
+                // b2) 滚动条:轨道点击跳转 / 滑块拖动
+                if app.sb_hit(gi, p.x, p.y) {
+                    let (tx, ty, tw, th_track) = app.scroll_track(gi);
+                    let (_, thumb_y, _, thumb_h) = app.scroll_thumb(gi);
+                    let max = app.max_scroll(gi);
+                    let mut sy = app.groups[gi].scroll_y;
+                    let in_thumb = p.y >= thumb_y && p.y <= thumb_y + thumb_h;
+                    if !in_thumb && th_track > thumb_h && max > 0 {
+                        // 轨道点击:滑块中心跳到点击处
+                        let span = (th_track - thumb_h).max(1);
+                        let rel = (p.y - thumb_y - thumb_h / 2).clamp(0, span);
+                        sy = ((rel * max) / span).clamp(0, max);
+                        app.groups[gi].scroll_y = sy;
+                        app.render_panel(gi);
+                    }
+                    app.sb = Some(crate::app::SbState {
+                        gi,
+                        start_y: p.y,
+                        start_scroll: sy,
+                    });
+                    let _ = SetCapture(hwnd);
+                    dlog(&format!("sb down gi={gi} thumb={in_thumb}"));
+                    return LRESULT(0);
+                }
                 // c) 溢出条 "+N":展开到能放下全部条目
                 if app.chip_at(gi, p.x, p.y) {
                     app.expand_to_fit(gi);
@@ -1141,24 +1275,83 @@ unsafe extern "system" fn panel_wndproc(
                 let hit = app.item_at(gi, p.x, p.y);
                 dlog(&format!("LBD g={gi} client=({},{}) hit={:?}", p.x, p.y, hit));
                 if let Some(idx) = app.item_at(gi, p.x, p.y) {
-                    dlog(&format!("DOWN g={gi} idx={idx}"));
-                    let old = app.selected;
-                    app.selected = Some((gi, idx));
-                    app.mouse.down = Some((gi, idx));
-                    app.mouse.down_pt = p;
-                    let _ = SetCapture(hwnd);
-                    if let Some((ogi, _)) = old {
-                        if ogi != gi {
-                            app.render_panel(ogi);
+                    let ctrl = wparam.0 & 0x8 != 0;
+                    let shift = wparam.0 & 0x4 != 0;
+                    if ctrl || shift {
+                        if shift {
+                            let anchor = app
+                                .selected
+                                .or_else(|| app.sel_multi.last().copied())
+                                .filter(|(g, _)| *g == gi)
+                                .map(|(_, a)| a);
+                            if let Some(a) = anchor {
+                                let lo = a.min(idx);
+                                let hi = a.max(idx);
+                                app.sel_multi = (lo..=hi).map(|i| (gi, i)).collect();
+                            } else {
+                                app.selected = Some((gi, idx));
+                            }
+                        } else if app.is_sel(gi, idx) {
+                            app.sel_multi.retain(|&k| k != (gi, idx));
+                            if app.selected == Some((gi, idx)) {
+                                app.selected = None;
+                            }
+                        } else {
+                            app.sel_multi.push((gi, idx));
+                            if app.selected.is_none() {
+                                app.selected = Some((gi, idx));
+                            }
                         }
+                        dlog(&format!(
+                            "multi n={} ctrl={ctrl} shift={shift}",
+                            app.sel_multi.len()
+                        ));
+                        app.mouse.down = Some((gi, idx));
+                        app.mouse.down_pt = p;
+                        let _ = SetCapture(hwnd);
+                        app.render_panel(gi);
+                    } else if !app.is_sel(gi, idx) {
+                        dlog(&format!("DOWN g={gi} idx={idx} (single)"));
+                        let old = app.selected;
+                        app.clear_sel();
+                        app.selected = Some((gi, idx));
+                        app.mouse.down = Some((gi, idx));
+                        app.mouse.down_pt = p;
+                        let _ = SetCapture(hwnd);
+                        if let Some((ogi, _)) = old {
+                            if ogi != gi {
+                                app.render_panel(ogi);
+                            }
+                        }
+                        app.render_panel(gi);
+                    } else {
+                        // 点击已选条目:保留多选(整组拖动)
+                        dlog(&format!("DOWN g={gi} idx={idx} (keep-multi)"));
+                        app.mouse.down = Some((gi, idx));
+                        app.mouse.down_pt = p;
+                        let _ = SetCapture(hwnd);
+                        app.render_panel(gi);
                     }
-                    app.render_panel(gi);
                 } else {
+                    // 空白:清选 + 框选起点
                     let old = app.selected.take();
+                    let had_multi = !app.sel_multi.is_empty();
+                    app.sel_multi.clear();
                     app.mouse.down = None;
-                    if let Some((ogi, _)) = old {
-                        if ogi != gi {
-                            app.render_panel(ogi);
+                    app.marquee = Some(crate::app::Marquee {
+                        gi,
+                        x0: p.x,
+                        y0: p.y,
+                        x1: p.x,
+                        y1: p.y,
+                        active: false,
+                    });
+                    let _ = SetCapture(hwnd);
+                    if old.is_some() || had_multi {
+                        if let Some((ogi, _)) = old {
+                            if ogi != gi {
+                                app.render_panel(ogi);
+                            }
                         }
                         app.render_panel(gi);
                     }
@@ -1203,6 +1396,39 @@ unsafe extern "system" fn panel_wndproc(
                 app.mv = Some(mv);
                 return LRESULT(0);
             }
+            if let Some(sb) = app.sb.take() {
+                let p = lparam_pt(lparam);
+                let (_, _, _, th_track) = app.scroll_track(sb.gi);
+                let (_, _, _, thumb_h) = app.scroll_thumb(sb.gi);
+                let max = app.max_scroll(sb.gi);
+                let span = (th_track - thumb_h).max(1);
+                let dy = p.y - sb.start_y;
+                let target = sb.start_scroll + dy * max.max(1) / span;
+                let new = target.clamp(0, max);
+                if new != app.groups[sb.gi].scroll_y {
+                    app.groups[sb.gi].scroll_y = new;
+                    app.render_panel(sb.gi);
+                }
+                app.sb = Some(sb);
+                return LRESULT(0);
+            }
+            if let Some(mut mq) = app.marquee.take() {
+                let p = lparam_pt(lparam);
+                if !mq.active {
+                    let dx = p.x - mq.x0;
+                    let dy = p.y - mq.y0;
+                    if dx * dx + dy * dy > 25 {
+                        mq.active = true;
+                    }
+                }
+                if mq.active {
+                    mq.x1 = p.x;
+                    mq.y1 = p.y;
+                    app.render_panel(mq.gi);
+                }
+                app.marquee = Some(mq);
+                return LRESULT(0);
+            }
             if app.mouse.down.is_some() {
                 let p = lparam_pt(lparam);
                 if let Some(gi) = find_group(app, hwnd) {
@@ -1226,6 +1452,9 @@ unsafe extern "system" fn panel_wndproc(
             }
             if let Some(mv) = app.mv.take() {
                 let _ = ReleaseCapture();
+                // 手动拖放的位置必须跨重启保留:置 user_pos,
+                // 否则启动时 place_groups 会把面板重新流式排版(位置丢失)
+                app.groups[mv.gi].user_pos = true;
                 let grid = app.settings.snap_grid;
                 if grid > 0 {
                     let (gx, gy) = {
@@ -1255,6 +1484,36 @@ unsafe extern "system" fn panel_wndproc(
                 app.save_config();
                 return LRESULT(0);
             }
+            if let Some(sb) = app.sb.take() {
+                let _ = ReleaseCapture();
+                dlog(&format!("sb up gi={} y={}", sb.gi, app.groups[sb.gi].scroll_y));
+            }
+            if let Some(mq) = app.marquee.take() {
+                let _ = ReleaseCapture();
+                if mq.active {
+                    let (x0, x1) = (mq.x0.min(mq.x1), mq.x0.max(mq.x1));
+                    let (y0, y1) = (mq.y0.min(mq.y1), mq.y0.max(mq.y1));
+                    let g = &app.groups[mq.gi];
+                    let cw = app.cell_w();
+                    let ch = app.cell_h();
+                    let sy = g.scroll_y;
+                    let mut hits: Vec<(usize, usize)> = Vec::new();
+                    for idx in 0..g.items.len() {
+                        let col = (idx as i32) % g.cols.max(1);
+                        let row = (idx as i32) / g.cols.max(1);
+                        let cx = MARGIN + PAD + col * cw;
+                        let cy = MARGIN + app.grid_top(mq.gi) + row * ch - sy;
+                        if cx < x1 && cx + cw > x0 && cy < y1 && cy + ch > y0 {
+                            hits.push((mq.gi, idx));
+                        }
+                    }
+                    hits.sort_unstable();
+                    app.sel_multi = hits;
+                    app.selected = app.sel_multi.first().copied();
+                    dlog(&format!("marquee sel n={}", app.sel_multi.len()));
+                    app.render_panel(mq.gi);
+                }
+            }
             if app.mouse.down.is_some() {
                 end_drag(app);
                 let _ = ReleaseCapture();
@@ -1267,8 +1526,29 @@ unsafe extern "system" fn panel_wndproc(
             let p = lparam_pt(lparam);
             if let Some(gi) = find_group(app, hwnd) {
                 if let Some(idx) = app.item_at(gi, p.x, p.y) {
-                    let item = app.groups[gi].items[idx].clone();
-                    desktop::open_item(Some(hwnd), &item);
+                    if app.is_sel(gi, idx) {
+                        let mut targets = app
+                            .sel_items(gi)
+                            .iter()
+                            .map(|i| (gi, *i))
+                            .collect::<Vec<_>>();
+                        for (g2, i2) in &app.sel_multi {
+                            if !targets.contains(&(*g2, *i2)) {
+                                targets.push((*g2, *i2));
+                            }
+                        }
+                        if let Some(pos) = targets.iter().position(|t| *t == (gi, idx)) {
+                            targets.swap(0, pos);
+                        }
+                        for (g2, i2) in targets.iter().take(16) {
+                            if let Some(it) = app.groups[*g2].items.get(*i2) {
+                                desktop::open_item(Some(hwnd), it);
+                            }
+                        }
+                    } else {
+                        let item = app.groups[gi].items[idx].clone();
+                        desktop::open_item(Some(hwnd), &item);
+                    }
                 }
             }
             return LRESULT(0);
@@ -1292,22 +1572,10 @@ unsafe extern "system" fn panel_wndproc(
                     let _ = GetCursorPos(&mut cp);
                     desktop::show_context_menu(hwnd, &item, cp.x, cp.y, IDM_OPEN);
                 } else {
-                    // 标题栏右键:面板管理菜单(新建/重命名/对齐/关闭);
-                    // 空白处右键:设置
-                    let in_title = {
-                        let g = &app.groups[gi];
-                        let px = p.x - MARGIN;
-                        let py = p.y - MARGIN;
-                        px >= 0 && py >= 0 && px < g.panel_w && py < TITLE_H
-                    };
+                    // 空白/标题右键:面板菜单(面板管理 + 应用选项,含"设置")
                     let mut cp = POINT::default();
                     let _ = GetCursorPos(&mut cp);
-                    if in_title {
-                        show_panel_menu(app, gi, hwnd, cp.x, cp.y);
-                    } else {
-                        let _ = PostMessageW(Some(hwnd), WM_OPEN_SETTINGS, WPARAM(0), LPARAM(0));
-                        dlog(&format!("RBUTTON blank -> settings gi={gi}"));
-                    }
+                    show_panel_menu(app, gi, hwnd, cp.x, cp.y);
                 }
             }
             return LRESULT(0);
@@ -1353,8 +1621,8 @@ unsafe extern "system" fn panel_wndproc(
 
         WM_TIMER => {
             if wparam.0 == TIMER_SETTLE_ID {
-                // 连续校正窗:每次 ensure,预算用尽后停表
-                if app.groups_visible {
+                // 连续校正窗:每次 ensure,预算用尽后停表(z_pause 时整窗暂停)
+                if app.groups_visible && !app.z_pause {
                     ensure_z_order(app);
                 }
                 app.settle_left = app.settle_left.saturating_sub(1);
@@ -1440,7 +1708,45 @@ unsafe extern "system" fn panel_wndproc(
             return LRESULT(0);
         }
 
+        WM_MOUSEWHEEL => {
+            // lparam = 屏幕坐标:滚动光标下的面板(与焦点无关)
+            let sp = lparam_pt(lparam);
+            let delta = (((wparam.0 >> 16) & 0xFFFF) as u16 as i16) as i32;
+            if delta == 0 {
+                return LRESULT(0);
+            }
+            for gi in 0..app.groups.len() {
+                let hw = app.groups[gi].hwnd;
+                if hw.is_invalid() || app.groups[gi].hidden {
+                    continue;
+                }
+                if !IsWindowVisible(hw).as_bool() {
+                    continue;
+                }
+                let mut r = RECT::default();
+                if GetWindowRect(hw, &mut r).is_err() {
+                    continue;
+                }
+                if sp.x < r.left || sp.x >= r.right || sp.y < r.top || sp.y >= r.bottom {
+                    continue;
+                }
+                let dy = delta * app.cell_h() / 120;
+                let max = app.max_scroll(gi);
+                let new = (app.groups[gi].scroll_y + dy).clamp(0, max);
+                if new != app.groups[gi].scroll_y {
+                    app.groups[gi].scroll_y = new;
+                    app.render_panel(gi);
+                    dlog(&format!("wheel gi={gi} dy={dy} y={new}/{max}"));
+                }
+                return LRESULT(0);
+            }
+            return LRESULT(0);
+        }
+
         WM_Z_REZ => {
+            if app.z_pause {
+                return LRESULT(0);
+            }
             // 防抖:我们自己的 SetWindowPos 也会触发 REORDER,100ms 内合并。
             // 合并(丢弃)时必须把 settle 收尾窗推到“最后一个事件”之后 —— 否则
             // 尾部真实事件(如 Win+D 洗牌的最后一次)会被丢掉且无人再纠正。
@@ -1497,6 +1803,47 @@ unsafe extern "system" fn panel_wndproc(
         WM_COMMAND => {
             let id = wparam.0 & 0xFFFF;
             match id {
+                // ---- 应用级选项(托盘/面板菜单共用) ----
+                IDM_SETTINGS => {
+                    let _ = PostMessageW(Some(hwnd), WM_OPEN_SETTINGS, WPARAM(0), LPARAM(0));
+                }
+                IDM_REFRESH => app.refresh_from_disk(),
+                IDM_TOGGLE_GROUPS => {
+                    app.groups_visible = !app.groups_visible;
+                    for gi in 0..app.groups.len() {
+                        if !app.groups[gi].hwnd.is_invalid() {
+                            let sw = if app.groups_visible && !app.groups[gi].hidden {
+                                SW_RESTORE
+                            } else {
+                                SW_HIDE
+                            };
+                            let _ = ShowWindow(app.groups[gi].hwnd, sw);
+                        }
+                    }
+                    if app.groups_visible {
+                        app.render_all();
+                        ensure_z_order(app);
+                    }
+                }
+                IDM_TOGGLE_ORIG => {
+                    app.show_original = !app.show_original;
+                    if app.show_original {
+                        if !app.desktop_lv.is_invalid() {
+                            desktop::show_listview(app.desktop_lv);
+                        }
+                    } else if !app.desktop_lv.is_invalid() {
+                        desktop::hide_listview(app.desktop_lv);
+                    }
+                }
+                IDM_AUTORUN => {
+                    // 注册表即开关状态:读取现值取反写回
+                    let on = !desktop::autorun_enabled();
+                    desktop::autorun_set(on);
+                }
+                IDM_EXIT => {
+                    PostQuitMessage(0);
+                }
+                // ---- 面板管理 ----
                 IDM_PNEW => {
                     dlog("pnew: begin");
                     let gi = app.new_panel();
@@ -1525,6 +1872,33 @@ unsafe extern "system" fn panel_wndproc(
                     if a <= 2 {
                         app.set_title_align(gi, a);
                         dlog(&format!("title align gi={gi} a={a}"));
+                    }
+                }
+                x if (IDM_PTITLE..IDM_PTITLE + 100).contains(&x) => {
+                    app.toggle_title_show(x - IDM_PTITLE);
+                }
+                x if (IDM_PHIDE..IDM_PHIDE + 100).contains(&x) => {
+                    let gi = x - IDM_PHIDE;
+                    if gi < app.groups.len() {
+                        app.groups[gi].hidden = true;
+                        app.save_config();
+                        if !app.groups[gi].hwnd.is_invalid() {
+                            let _ = ShowWindow(app.groups[gi].hwnd, SW_HIDE);
+                        }
+                        dlog(&format!("panel hide gi={gi}"));
+                    }
+                }
+                x if (IDM_PSHOW..IDM_PSHOW + 100).contains(&x) => {
+                    let gi = x - IDM_PSHOW;
+                    if gi < app.groups.len() && app.groups[gi].hidden {
+                        app.groups[gi].hidden = false;
+                        app.save_config();
+                        if app.groups_visible && !app.groups[gi].hwnd.is_invalid() {
+                            let _ = ShowWindow(app.groups[gi].hwnd, SW_RESTORE);
+                            app.render_panel(gi);
+                            ensure_z_order(app);
+                        }
+                        dlog(&format!("panel show gi={gi}"));
                     }
                 }
                 _ => {}

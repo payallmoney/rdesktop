@@ -13,15 +13,21 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::UI::Shell::{
     CMINVOKECOMMANDINFO, CSIDL_DRIVES, FOLDERID_Desktop, FOLDERID_PublicDesktop, IContextMenu,
-    IShellItem, IShellItemImageFactory, KF_FLAG_DEFAULT, SHCreateItemFromIDList,
+    IShellFolder, IShellItem, IShellItemImageFactory, KF_FLAG_DEFAULT, SHBindToParent,
+    SHCreateItemFromIDList,
     SHCreateItemFromParsingName, SHDefExtractIconW, SHGetFileInfoW, SHGetFolderLocation,
-    SHGetKnownFolderPath, SHParseDisplayName, SHGFI_ICON, SHGFI_LARGEICON, SHGFI_PIDL,
-    SHFILEINFOW, SIIGBF_ICONONLY, ShellExecuteW,
+    GCS_VERBW, SHGetKnownFolderPath, SHParseDisplayName, SHGFI_ICON, SHGFI_LARGEICON,
+    SHGFI_PIDL, SHFILEINFOW, SIIGBF_ICONONLY, ShellExecuteW,
+};
+use windows::Win32::System::LibraryLoader::GetModuleFileNameW;
+use windows::Win32::System::Registry::{
+    RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_SZ,
 };
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreatePopupMenu, DestroyIcon, DestroyMenu, HICON, MB_ICONERROR, MB_OK, MessageBoxW,
-    SW_SHOWNORMAL, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_NULL,
+    CreatePopupMenu, DestroyIcon, DestroyMenu, GetMenuItemID, HICON, MB_ICONERROR, MB_OK,
+    MessageBoxW, SW_SHOWNORMAL, SetMenuDefaultItem, TPM_RETURNCMD, TPM_RIGHTBUTTON,
+    TrackPopupMenu, WM_NULL,
 };
 use windows::Win32::UI::WindowsAndMessaging::HMENU;
 use windows::core::w;
@@ -181,6 +187,13 @@ pub fn enumerate_items() -> Vec<Item> {
             };
             if name.eq_ignore_ascii_case("desktop.ini") {
                 continue;
+            }
+            // 与资源管理器默认一致:跳过隐藏属性的条目
+            if let Ok(md) = ent.metadata() {
+                use std::os::windows::fs::MetadataExt;
+                if md.file_attributes() & 0x2 != 0 {
+                    continue;
+                }
             }
             let is_dir = ent.file_type().map(|t| t.is_dir()).unwrap_or(false);
             let rule: u8 = if is_dir {
@@ -549,12 +562,63 @@ pub fn show_context_menu(hwnd: HWND, item: &crate::app::Item, x: i32, y: i32, cm
         let mut src = "none";
 
         if let Some(pidl) = item_pidl(item) {
-            if let Ok(desk) = windows::Win32::UI::Shell::SHGetDesktopFolder() {
-                let arr = [pidl as *const ITEMIDLIST];
-                let cm: Option<IContextMenu> = desk.GetUIObjectOf(hwnd, &arr, None).ok();
-                if let Some(cm) = cm {
+            // 规范绑定:真实父文件夹 + 相对子 PIDL(资源管理器同款路径),
+            // 才包含 重命名/打开方式/发送到/复制文件地址 等静态动词段;
+            // 旧的"桌面文件夹+绝对PIDL"会缺整段菜单。
+            let mut cm: Option<IContextMenu> = None;
+            let mut child: *mut ITEMIDLIST = std::ptr::null_mut();
+            match SHBindToParent::<IShellFolder>(pidl, Some(&mut child)) {
+                Ok(folder) if !child.is_null() => {
+                    let arr = [child as *const ITEMIDLIST];
+                    cm = folder.GetUIObjectOf(hwnd, &arr, None).ok();
+                }
+                Ok(_) => {}
+                Err(e) => crate::panel::dlog(&format!("ctx SHBindToParent FAIL {e}")),
+            }
+            if cm.is_none() {
+                // 兜底:桌面文件夹 + 绝对 PIDL
+                if let Ok(desk) = windows::Win32::UI::Shell::SHGetDesktopFolder() {
+                    let arr = [pidl as *const ITEMIDLIST];
+                    cm = desk.GetUIObjectOf(hwnd, &arr, None).ok();
+                }
+            }
+            if let Some(cm) = cm {
                     let hr = cm.QueryContextMenu(menu, 0, 1, 0x7FFF, 0);
                     if hr.is_ok() {
+                        // 默认动词加粗(与资源管理器经典菜单一致,通常是“打开”)
+                        let mut def_idx: u32 = u32::MAX;
+                        let mut mi: u32 = 0;
+                        loop {
+                            let id = GetMenuItemID(menu, mi as i32);
+                            if id == u32::MAX {
+                                break;
+                            }
+                            let cid = id as usize;
+                            if cid >= 1 && cid <= 0x7FFF {
+                                let mut vb = [0u16; 64];
+                                if cm
+                                    .GetCommandString(
+                                        cid - 1,
+                                        GCS_VERBW,
+                                        None,
+                                        windows::core::PSTR(vb.as_mut_ptr() as *mut u8),
+                                        (vb.len() - 1) as u32,
+                                    )
+                                    .is_ok()
+                                {
+                                    let end = vb.iter().position(|&c| c == 0).unwrap_or(0);
+                                    let verb = String::from_utf16_lossy(&vb[..end]);
+                                    if verb.eq_ignore_ascii_case("open") {
+                                        def_idx = mi;
+                                        break;
+                                    }
+                                }
+                            }
+                            mi += 1;
+                        }
+                        if def_idx != u32::MAX {
+                            let _ = SetMenuDefaultItem(menu, def_idx, 0x400); // MF_BYPOSITION
+                        }
                         force_foreground(hwnd);
                         let cmd = TrackPopupMenu(
                             menu,
@@ -593,9 +657,8 @@ pub fn show_context_menu(hwnd: HWND, item: &crate::app::Item, x: i32, y: i32, cm
                     } else {
                         crate::panel::dlog(&format!("ctx query FAIL {hr}"));
                     }
-                } else {
-                    crate::panel::dlog("ctx GetUIObjectOf FAIL");
-                }
+            } else {
+                crate::panel::dlog("ctx GetUIObjectOf FAIL");
             }
             windows::Win32::UI::Shell::ILFree(Some(pidl));
         } else {
@@ -639,6 +702,65 @@ pub fn show_context_menu(hwnd: HWND, item: &crate::app::Item, x: i32, y: i32, cm
             item.key
         ));
         let _ = DestroyMenu(menu);
+    }
+}
+
+// ================= 开机自启动(HKCU Run 键) =================
+
+const RUN_SUBKEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+const RUN_VALUE: &str = "rdesktop";
+
+/// 当前是否已设置开机自启动(Run 键存在即视为开启)
+pub fn autorun_enabled() -> bool {
+    unsafe {
+        let k = ws(RUN_SUBKEY);
+        let v = ws(RUN_VALUE);
+        let mut buf = [0u16; 520];
+        let mut cb: u32 = (buf.len() * 2) as u32;
+        let r = RegGetValueW(
+            HKEY_CURRENT_USER,
+            PCWSTR(k.as_ptr()),
+            PCWSTR(v.as_ptr()),
+            RRF_RT_REG_SZ,
+            None,
+            Some(buf.as_mut_ptr() as *mut core::ffi::c_void),
+            Some(&mut cb),
+        );
+        r.0 == 0
+    }
+}
+
+/// 开/关开机自启动:写/删 HKCU...Run 的 "rdesktop" 值(带引号的 exe 全路径)。
+/// 注册表即持久化,菜单勾选态直接读它,单一事实源。
+pub fn autorun_set(on: bool) {
+    unsafe {
+        let k = ws(RUN_SUBKEY);
+        let v = ws(RUN_VALUE);
+        if on {
+            let mut path = [0u16; 520];
+            let n = GetModuleFileNameW(None, &mut path);
+            if n == 0 {
+                crate::panel::dlog("autorun: GetModuleFileNameW FAIL");
+                return;
+            }
+            let mut data: Vec<u16> = Vec::with_capacity(n as usize + 3);
+            data.push('"' as u16);
+            data.extend_from_slice(&path[..n as usize]);
+            data.push('"' as u16);
+            data.push(0);
+            let r = RegSetKeyValueW(
+                HKEY_CURRENT_USER,
+                PCWSTR(k.as_ptr()),
+                PCWSTR(v.as_ptr()),
+                REG_SZ.0,
+                Some(data.as_ptr() as *const core::ffi::c_void),
+                (data.len() * 2) as u32,
+            );
+            crate::panel::dlog(&format!("autorun set on r={}", r.0));
+        } else {
+            let r = RegDeleteKeyValueW(HKEY_CURRENT_USER, PCWSTR(k.as_ptr()), PCWSTR(v.as_ptr()));
+            crate::panel::dlog(&format!("autorun set off r={}", r.0));
+        }
     }
 }
 

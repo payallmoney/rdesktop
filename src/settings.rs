@@ -26,10 +26,13 @@ const IDC_OK: i32 = 207;
 const IDC_CANCEL: i32 = 208;
 const IDC_CGAP: i32 = 205; // 列间距
 const IDC_RGAP: i32 = 206; // 行间距
+const IDC_SHOWTITLE: i32 = 209; // 显示面板标题
 // 间距档位
 // 间距/圆角为直接输入的像素值(见 get_i32),按布局约束钳制:
 // 列0..48 / 行0..40(与 cell_w/h 的 clamp 一致),圆角0..64
 const IDC_Z0: i32 = 211; // 图层选择,IDC_Z0 + 组号(0..3)
+const IDC_PHIDE: i32 = 240; // 每面板隐藏勾选:240+gi
+const IDC_PTSHOW: i32 = 250; // 每面板显示标题勾选:250+gi
 
 // 圆角档位 / 对齐网格档位(与下拉顺序一一对应)
 const GRIDS: [i32; 4] = [0, 8, 16, 32];
@@ -37,7 +40,7 @@ const GRIDS: [i32; 4] = [0, 8, 16, 32];
 const GRID_LABELS: [&str; 4] = ["关闭", "8 像素", "16 像素", "32 像素"];
 
 const BASE_W: i32 = 440;
-const BASE_H: i32 = 416;
+const BASE_H: i32 = 452;
 
 // 图层选项(每个面板)
 const LAYER_LABELS: [&str; 2] = ["最低层(桌面之上,不遮挡应用)", "最高层(置顶显示)"];
@@ -213,7 +216,9 @@ unsafe extern "system" fn name_wndproc(
         GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut App
     };
     match msg {
-        WM_NCCREATE => LRESULT(1),
+        // 必须转发给 DefWindowProc:窗口文本(标题)正是在这一步从
+        // CREATESTRUCT 存入的,直接返回 1 会让标题永远为空
+        WM_NCCREATE => DefWindowProcW(hwnd, msg, wparam, lparam),
         WM_COMMAND => {
             if app_ptr.is_null() {
                 return LRESULT(0);
@@ -313,7 +318,7 @@ pub fn open_settings(app: &mut App) {
             crate::panel::dlog("settings: GetModuleHandle failed");
             return;
         };
-        let title = ws("rdesktop 设置");
+        let title = ws("桌面管理");
         let hwnd = match CreateWindowExW(
             WS_EX_DLGMODALFRAME,
             SETTINGS_CLASS,
@@ -499,6 +504,20 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
         IDC_RADIUS,
         font,
     );
+    // 显示面板标题
+    mk(
+        hwnd,
+        w!("BUTTON"),
+        "显示面板标题",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
+        WINDOW_EX_STYLE(0),
+        s(16),
+        s(82),
+        s(410),
+        s(24),
+        IDC_SHOWTITLE,
+        font,
+    );
     // 自动整理
     mk(
         hwnd,
@@ -507,7 +526,7 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
         WINDOW_EX_STYLE(0),
         s(16),
-        s(86),
+        s(120),
         s(410),
         s(24),
         IDC_TIDY,
@@ -521,7 +540,7 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
         WS_CHILD | WS_VISIBLE,
         WINDOW_EX_STYLE(0),
         s(16),
-        s(124),
+        s(158),
         s(60),
         s(20),
         0,
@@ -534,7 +553,7 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
         WS_CHILD | WS_VISIBLE | WS_VSCROLL | WINDOW_STYLE(CBS_DROPDOWNLIST as u32),
         WINDOW_EX_STYLE(0),
         s(80),
-        s(120),
+        s(154),
         s(200),
         s(200),
         IDC_GRID,
@@ -548,7 +567,7 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
         WS_CHILD | WS_VISIBLE,
         WINDOW_EX_STYLE(0),
         s(16),
-        s(158),
+        s(192),
         s(64),
         s(22),
         0,
@@ -562,7 +581,7 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
             | WINDOW_STYLE((ES_AUTOHSCROLL | ES_NUMBER) as u32),
         WINDOW_EX_STYLE(0),
         s(84),
-        s(154),
+        s(188),
         s(72),
         s(24),
         IDC_CGAP,
@@ -575,7 +594,7 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
         WS_CHILD | WS_VISIBLE,
         WINDOW_EX_STYLE(0),
         s(200),
-        s(158),
+        s(192),
         s(64),
         s(22),
         0,
@@ -589,7 +608,7 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
             | WINDOW_STYLE((ES_AUTOHSCROLL | ES_NUMBER) as u32),
         WINDOW_EX_STYLE(0),
         s(268),
-        s(154),
+        s(188),
         s(72),
         s(24),
         IDC_RGAP,
@@ -602,7 +621,7 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
         WS_CHILD | WS_VISIBLE,
         WINDOW_EX_STYLE(0),
         s(16),
-        s(194),
+        s(228),
         s(410),
         s(36),
         0,
@@ -612,11 +631,11 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
     mk(
         hwnd,
         w!("STATIC"),
-        "图层(每个面板,默认最低层)",
+        "每个面板:图层 / 隐藏 / 标题",
         WS_CHILD | WS_VISIBLE,
         WINDOW_EX_STYLE(0),
         s(16),
-        s(236),
+        s(270),
         s(410),
         s(20),
         0,
@@ -630,7 +649,7 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
             WS_CHILD | WS_VISIBLE,
             WINDOW_EX_STYLE(0),
             s(16),
-            s(268 + gi as i32 * 36),
+            s(302 + gi as i32 * 36),
             s(118),
             s(22),
             0,
@@ -643,8 +662,8 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
             WS_CHILD | WS_VISIBLE | WS_VSCROLL | WINDOW_STYLE(CBS_DROPDOWNLIST as u32),
             WINDOW_EX_STYLE(0),
             s(140),
-            s(264 + gi as i32 * 36),
-            s(284),
+            s(298 + gi as i32 * 36),
+            s(150),
             s(180),
             IDC_Z0 + gi as i32,
             font,
@@ -654,6 +673,35 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
             let idx = if app.groups[gi].z_top { 1 } else { 0 };
             let _ = SendMessageW(cb, CB_SETCURSEL, Some(WPARAM(idx)), None);
         }
+        // 每面板:隐藏 / 显示标题
+        mk(
+            hwnd,
+            w!("BUTTON"),
+            "隐藏",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
+            WINDOW_EX_STYLE(0),
+            s(300),
+            s(302 + gi as i32 * 36),
+            s(56),
+            s(22),
+            IDC_PHIDE + gi as i32,
+            font,
+        );
+        mk(
+            hwnd,
+            w!("BUTTON"),
+            "标题",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
+            WINDOW_EX_STYLE(0),
+            s(364),
+            s(302 + gi as i32 * 36),
+            s(60),
+            s(22),
+            IDC_PTSHOW + gi as i32,
+            font,
+        );
+        set_check(hwnd, IDC_PHIDE + gi as i32, app.groups[gi].hidden);
+        set_check(hwnd, IDC_PTSHOW + gi as i32, app.groups[gi].title_show);
     }
     // 按钮
     mk(
@@ -663,7 +711,7 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_PUSHBUTTON as u32),
         WINDOW_EX_STYLE(0),
         s(248),
-        s(264 + n_pop * 36),
+        s(298 + n_pop * 36),
         s(84),
         s(30),
         IDC_OK,
@@ -676,7 +724,7 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_PUSHBUTTON as u32),
         WINDOW_EX_STYLE(0),
         s(344),
-        s(264 + n_pop * 36),
+        s(298 + n_pop * 36),
         s(84),
         s(30),
         IDC_CANCEL,
@@ -686,6 +734,7 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
     // 初值
     set_check(hwnd, IDC_FROST, app.settings.frosted);
     set_check(hwnd, IDC_TIDY, app.settings.auto_tidy);
+    set_check(hwnd, IDC_SHOWTITLE, app.settings.show_title);
     if let Some(cb) = cb_g {
         combo_add(cb, &GRID_LABELS);
         let idx = GRIDS.iter().position(|&g| g == app.settings.snap_grid).unwrap_or(0);
@@ -734,6 +783,7 @@ unsafe fn commit(app: &mut App, hwnd: HWND) {
         snap_grid: grid,
         col_gap,
         row_gap,
+        show_title: get_check(hwnd, IDC_SHOWTITLE),
     };
     // 每个面板的图层
     let mut z_top = vec![false; app.groups.len()];
@@ -743,14 +793,53 @@ unsafe fn commit(app: &mut App, hwnd: HWND) {
             .unwrap_or(app.groups[gi].z_top);
     }
     let z_changed = (0..app.groups.len()).any(|gi| app.groups[gi].z_top != z_top[gi]);
+    let n_g = app.groups.len();
+    let mut p_hide = vec![false; n_g];
+    let mut p_title = vec![false; n_g];
+    for gi in 0..n_g {
+        p_hide[gi] = get_check(hwnd, IDC_PHIDE + gi as i32);
+        p_title[gi] = get_check(hwnd, IDC_PTSHOW + gi as i32);
+    }
+    let hide_changed = (0..n_g).any(|gi| app.groups[gi].hidden != p_hide[gi]);
+    let title_changed = (0..n_g).any(|gi| app.groups[gi].title_show != p_title[gi]);
 
+    if new.show_title != old.show_title {
+        for g in app.groups.iter_mut() {
+            g.title_show = new.show_title;
+        }
+    }
     app.settings = new.clone();
     for gi in 0..app.groups.len() {
         app.groups[gi].z_top = z_top[gi];
     }
+    for gi in 0..n_g {
+        // 隐藏开关:立即生效
+        if app.groups[gi].hidden != p_hide[gi] {
+            app.groups[gi].hidden = p_hide[gi];
+            if let h = app.groups[gi].hwnd {
+                if !h.is_invalid() {
+                    if p_hide[gi] {
+                        let _ = ShowWindow(h, SW_HIDE);
+                    } else if app.groups_visible {
+                        let _ = ShowWindow(h, SW_RESTORE);
+                        app.render_panel(gi);
+                    }
+                }
+            }
+        }
+        // 标题开关:该面板布局收窄/恢复
+        app.groups[gi].title_show = p_title[gi];
+    }
+    if title_changed {
+        app.place_groups();
+        app.render_all();
+    }
+    if hide_changed {
+        crate::panel::ensure_z_order(app);
+    }
     app.save_config();
 
-    if new.col_gap != old.col_gap || new.row_gap != old.row_gap {
+    if new.show_title != old.show_title || new.col_gap != old.col_gap || new.row_gap != old.row_gap {
         // 间距变化:重新流式摆位 + 全量重绘
         app.place_groups();
         app.render_all();
@@ -833,7 +922,7 @@ unsafe extern "system" fn settings_wndproc(
     };
 
     match msg {
-        WM_NCCREATE => LRESULT(1),
+        WM_NCCREATE => DefWindowProcW(hwnd, msg, wparam, lparam),
         WM_COMMAND => {
             if app_ptr.is_null() {
                 return LRESULT(0);

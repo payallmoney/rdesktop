@@ -6,6 +6,7 @@
 mod app;
 mod desktop;
 mod panel;
+mod regstore;
 mod render;
 mod settings;
 

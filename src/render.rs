@@ -26,7 +26,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowRect, SetWindowPos, UpdateLayeredWindow, SWP_NOACTIVATE, SWP_NOZORDER, ULW_ALPHA,
 };
 
-use crate::app::{App, Surface, GRID_TOP, ICON_SZ, ICON_TOP, MARGIN, PAD};
+use crate::app::{App, Surface, ICON_SZ, ICON_TOP, MARGIN, PAD};
+use windows::Win32::Graphics::Direct2D::D2D1_ANTIALIAS_MODE_PER_PRIMITIVE;
 
 fn color(r: f32, g: f32, b: f32, a: f32) -> D2D1_COLOR_F {
     D2D1_COLOR_F { r, g, b, a }
@@ -384,7 +385,7 @@ impl App {
             let title = format!("{} · {}", g.title, g.items.len());
             let title_brush = rt.CreateSolidColorBrush(&color(0.96, 0.97, 0.99, 1.0), None)?;
             let shadow_brush = rt.CreateSolidColorBrush(&color(0.0, 0.0, 0.0, 0.55), None)?;
-            {
+            if g.title_show {
                 // 标题:按面板设置 左/中/右 对齐
                 let wt2: Vec<u16> = title.encode_utf16().collect();
                 if !wt2.is_empty() {
@@ -428,7 +429,7 @@ impl App {
                     &self.fmt_hint,
                     "拖拽桌面图标到这里",
                     (MARGIN + PAD) as f32,
-                    (MARGIN + GRID_TOP + 20) as f32,
+                    (MARGIN + self.grid_top(gi) + 20) as f32,
                     (g.panel_w - 2 * PAD) as f32,
                     30.0,
                     &hint_brush,
@@ -437,7 +438,17 @@ impl App {
                 )?;
             }
 
-            // 图标网格
+            // 图标网格(滚动偏移 + 只在可视行区内绘制)
+            {
+                let gt0 = self.grid_top(gi);
+                let clip = D2D_RECT_F {
+                    left: (MARGIN + 2) as f32,
+                    top: (MARGIN + gt0) as f32,
+                    right: (MARGIN + g.panel_w - 2) as f32,
+                    bottom: (MARGIN + gt0 + g.rows.max(1) * ch) as f32,
+                };
+                let _ = rt.PushAxisAlignedClip(&clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+            }
             let label_brush = rt.CreateSolidColorBrush(&color(0.93, 0.94, 0.96, 0.97), None)?;
             for idx in 0..g.items.len() {
                 let col = (idx as i32) % g.cols;
@@ -446,8 +457,9 @@ impl App {
                     break;
                 }
                 let cx = (MARGIN + PAD + col * cw) as f32;
-                let cy = (MARGIN + GRID_TOP + row * ch) as f32;
-                let is_selected = self.selected == Some((gi, idx));
+                let sy = g.scroll_y as f32;
+                let cy = (MARGIN + self.grid_top(gi) + row * ch) as f32 - sy;
+                let is_selected = self.is_sel(gi, idx);
                 let is_drag_src = self.mouse.dragging
                     && self.mouse.src == Some(gi)
                     && self.mouse.down == Some((gi, idx));
@@ -545,7 +557,7 @@ impl App {
                     let row = (cell as i32) / g.cols.max(1);
                     if row < g.rows {
                         let hx = (MARGIN + PAD + col * cw + 2) as f32;
-                        let hy = (MARGIN + GRID_TOP + row * ch) as f32;
+                        let hy = (MARGIN + self.grid_top(gi) + row * ch) as f32 - g.scroll_y as f32;
                         let hr = D2D1_ROUNDED_RECT {
                             rect: D2D_RECT_F {
                                 left: hx,
@@ -561,6 +573,60 @@ impl App {
                         rt.DrawGeometry(&geo, &b, 2.0, None);
                     }
                 }
+            }
+
+            let _ = rt.PopAxisAlignedClip();
+
+            // 框选矩形
+            if let Some(mq) = &self.marquee {
+                if mq.active && mq.gi == gi {
+                    let rx = mq.x0.min(mq.x1) as f32;
+                    let ry = mq.y0.min(mq.y1) as f32;
+                    let rw = (mq.x0 - mq.x1).abs() as f32;
+                    let rh = (mq.y0 - mq.y1).abs() as f32;
+                    let rr = D2D1_ROUNDED_RECT {
+                        rect: D2D_RECT_F { left: rx, top: ry, right: rx + rw, bottom: ry + rh },
+                        radiusX: 2.0,
+                        radiusY: 2.0,
+                    };
+                    let geo = self.d2d.CreateRoundedRectangleGeometry(&rr)?;
+                    let bf = rt.CreateSolidColorBrush(&color(0.35, 0.65, 1.0, 0.15), None)?;
+                    rt.FillGeometry(&geo, &bf, None);
+                    let bl = rt.CreateSolidColorBrush(&color(0.35, 0.65, 1.0, 0.8), None)?;
+                    rt.DrawGeometry(&geo, &bl, 1.5, None);
+                }
+            }
+
+            // 垂直滚动条(内容超高时的细轨道+滑块)
+            if self.scroll_bar_visible(gi) {
+                let (bx, by, bw, bh) = self.scroll_track(gi);
+                let track = D2D1_ROUNDED_RECT {
+                    rect: D2D_RECT_F {
+                        left: bx as f32,
+                        top: by as f32,
+                        right: (bx + bw) as f32,
+                        bottom: (by + bh) as f32,
+                    },
+                    radiusX: 3.0,
+                    radiusY: 3.0,
+                };
+                let geo = self.d2d.CreateRoundedRectangleGeometry(&track)?;
+                let tb = rt.CreateSolidColorBrush(&color(1.0, 1.0, 1.0, 0.10), None)?;
+                rt.FillGeometry(&geo, &tb, None);
+                let (tx2, ty2, tw2, th2) = self.scroll_thumb(gi);
+                let thumb = D2D1_ROUNDED_RECT {
+                    rect: D2D_RECT_F {
+                        left: tx2 as f32,
+                        top: ty2 as f32,
+                        right: (tx2 + tw2) as f32,
+                        bottom: (ty2 + th2) as f32,
+                    },
+                    radiusX: 3.0,
+                    radiusY: 3.0,
+                };
+                let geo2 = self.d2d.CreateRoundedRectangleGeometry(&thumb)?;
+                let tb2 = rt.CreateSolidColorBrush(&color(1.0, 1.0, 1.0, 0.34), None)?;
+                rt.FillGeometry(&geo2, &tb2, None);
             }
 
             // 溢出指示 "+N"(手动改小后提示还有内容;点击展开)

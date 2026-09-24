@@ -37,6 +37,10 @@ pub const IDM_TOGGLE_ORIG: usize = 1003;
 pub const IDM_EXIT: usize = 1004;
 pub const IDM_OPEN: usize = 1101;
 pub const IDM_SETTINGS: usize = 1010;
+pub const IDM_AUTORUN: usize = 1011; // 开机自启动(HKCU Run 键)
+pub const IDM_PHIDE: usize = 2000; // +gi 隐藏面板
+pub const IDM_PSHOW: usize = 2100; // +gi 托盘重显面板
+pub const IDM_PTITLE: usize = 2200; // +gi 每面板显示标题开
 // 面板右键菜单(WM_COMMAND 分发,便于自动化)
 pub const IDM_PNEW: usize = 1200; // 新建面板
 pub const IDM_PRENAME: usize = 1210; // +gi  重命名
@@ -48,8 +52,8 @@ pub const WM_Z_REZ: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 5; /
 /// hover 状态:0=无;HOVER_TITLE=标题(移动);其余为 HTLEFT/HTRIGHT/...(缩放热区)
 pub const HOVER_TITLE: u32 = 0x1000;
 
-fn min_h_const(ch: i32) -> i32 {
-    GRID_TOP + ch + BOTTOM_PAD
+fn min_h_const(gt: i32, ch: i32) -> i32 {
+    gt + ch + BOTTOM_PAD
 }
 
 pub fn ws(s: &str) -> Vec<u16> {
@@ -89,6 +93,9 @@ pub struct Group {
     pub manual_w: i32,
     pub manual_h: i32,
     pub manual_ord: bool, // 组内顺序已被用户手动排过(优先于自动排序)
+    pub hidden: bool,     // 单面板隐藏(托盘可重显)
+    pub title_show: bool, // 本面板是否绘制标题
+    pub scroll_y: i32,    // 内容垂直滚动偏移(px;会话内状态)
 }
 
 pub struct Surface {
@@ -123,6 +130,23 @@ pub struct MoveState {
     pub win_t: i32,
 }
 
+/// 框选状态(客户区坐标;active=移动超阈值后真正进入框选)
+pub struct Marquee {
+    pub gi: usize,
+    pub x0: i32,
+    pub y0: i32,
+    pub x1: i32,
+    pub y1: i32,
+    pub active: bool,
+}
+
+/// 滚动条滑块拖动状态
+pub struct SbState {
+    pub gi: usize,
+    pub start_y: i32,        // 按下时的客户区 y
+    pub start_scroll: i32,   // 按下时的滚动偏移
+}
+
 #[derive(Default)]
 pub struct Mouse {
     pub down: Option<(usize, usize)>, // 按下的 (组, 项)
@@ -154,6 +178,9 @@ impl Group {
             manual_h: 0,
             manual_ord: false,
             title_align: 1,
+            hidden: false,
+            title_show: true,
+            scroll_y: 0,
         }
     }
 }
@@ -168,6 +195,8 @@ pub struct Settings {
 
     pub col_gap: i32, // 列间距
     pub row_gap: i32, // 行间距
+
+    pub show_title: bool, // 显示面板标题
 }
 
 impl Default for Settings {
@@ -179,6 +208,7 @@ impl Default for Settings {
             snap_grid: 0,
             col_gap: DEFAULT_COL_GAP,
             row_gap: DEFAULT_ROW_GAP,
+            show_title: true,
         }
     }
 }
@@ -216,9 +246,13 @@ pub struct App {
     pub z_pause: bool,
     pub rez_last: Option<std::time::Instant>,
     pub settle_left: u32,
+    pub z_pref: Vec<usize>, // 低层面板叠放偏好(自顶向下;点标题提层记录,配置 zo 键)
     pub hover: u32,
     pub rs: Option<ResizeState>,
     pub mv: Option<MoveState>,
+    pub sb: Option<SbState>,
+    pub sel_multi: Vec<(usize, usize)>, // 附加选中(主选中在 selected)
+    pub marquee: Option<Marquee>,
     pub settings_font: windows::Win32::Graphics::Gdi::HFONT,
     pub config_path: PathBuf,
     pub desktop_lv: HWND,
@@ -237,6 +271,130 @@ impl App {
     }
 
     /// 当前列宽 = 内容宽 + 列间距
+    /// 内容总行数 / 最大滚动量 / 滚动条几何
+    pub fn content_rows(&self, gi: usize) -> i32 {
+        let g = &self.groups[gi];
+        let cols = g.cols.max(1);
+        ((g.items.len() as i32) + cols - 1) / cols
+    }
+    pub fn max_scroll(&self, gi: usize) -> i32 {
+        let g = &self.groups[gi];
+        let extra = self.content_rows(gi) - g.rows;
+        if extra <= 0 {
+            0
+        } else {
+            extra * self.cell_h()
+        }
+    }
+    pub fn scroll_bar_visible(&self, gi: usize) -> bool {
+        self.max_scroll(gi) > 0
+    }
+    /// 滚动条轨道(客户区坐标 x,y,w,h):贴面板右侧内缘
+    pub fn scroll_track(&self, gi: usize) -> (i32, i32, i32, i32) {
+        let g = &self.groups[gi];
+        (
+            MARGIN + g.panel_w - 18,
+            MARGIN + self.grid_top(gi),
+            6,
+            g.rows.max(1) * self.cell_h(),
+        )
+    }
+    pub fn scroll_thumb(&self, gi: usize) -> (i32, i32, i32, i32) {
+        let (x, y, w, h) = self.scroll_track(gi);
+        let g = &self.groups[gi];
+        let content = self.content_rows(gi).max(1);
+        let vis = g.rows.max(1);
+        let th = ((h * vis) / content).max(18).min(h);
+        let m = self.max_scroll(gi);
+        let ty = if m > 0 && h > th {
+            y + (h - th) * g.scroll_y / m
+        } else {
+            y
+        };
+        (x, ty, w, th)
+    }
+    /// 客户区点是否落在滚动条轨道(含3px 容差)
+    pub fn sb_hit(&self, gi: usize, x: i32, y: i32) -> bool {
+        if !self.scroll_bar_visible(gi) {
+            return false;
+        }
+        let (tx, ty, tw, th) = self.scroll_track(gi);
+        x >= tx - 3 && x <= tx + tw + 3 && y >= ty - 3 && y <= ty + th + 3
+    }
+
+    /// 本面板标题带高度/网格起点:该面板隐藏标题时顶部收窄为 14px 拖动带
+    pub fn title_h(&self, gi: usize) -> i32 {
+        if self.groups.get(gi).map(|g| g.title_show).unwrap_or(true) {
+            TITLE_H
+        } else {
+            14
+        }
+    }
+    pub fn grid_top(&self, gi: usize) -> i32 {
+        if self.groups.get(gi).map(|g| g.title_show).unwrap_or(true) {
+            GRID_TOP
+        } else {
+            18
+        }
+    }
+
+    pub fn is_sel(&self, gi: usize, idx: usize) -> bool {
+        self.selected == Some((gi, idx)) || self.sel_multi.contains(&(gi, idx))
+    }
+    pub fn clear_sel(&mut self) {
+        self.selected = None;
+        self.sel_multi.clear();
+    }
+    /// 某面板的选中条目(升序)
+    pub fn sel_items(&self, gi: usize) -> Vec<usize> {
+        let mut v: Vec<usize> = self
+            .sel_multi
+            .iter()
+            .filter(|(g, _)| *g == gi)
+            .map(|(_, i)| *i)
+            .collect();
+        if let Some((g, i)) = self.selected {
+            if g == gi && !v.contains(&i) {
+                v.push(i);
+            }
+        }
+        v.sort_unstable();
+        v
+    }
+
+    /// 菜单:切换本面板标题显示(布局与渲染联动)
+    pub fn toggle_title_show(&mut self, gi: usize) {
+        if gi >= self.groups.len() {
+            return;
+        }
+        self.groups[gi].title_show = !self.groups[gi].title_show;
+        self.save_config();
+        self.place_groups();
+        self.render_all();
+    }
+
+    /// 期望叠放序(自顶向下):偏好优先,未记录/新增面板按组号补在末尾
+    pub fn want_order(&self, low: &[usize]) -> Vec<usize> {
+        let mut want: Vec<usize> = Vec::new();
+        for g in &self.z_pref {
+            if low.contains(g) && !want.contains(g) {
+                want.push(*g);
+            }
+        }
+        for g in low {
+            if !want.contains(g) {
+                want.push(*g);
+            }
+        }
+        want
+    }
+
+    /// 点标题提层:记入偏好最前(纠偏时保序,不再被升序重建压回)
+    pub fn raise_pref(&mut self, gi: usize) {
+        self.z_pref.retain(|&x| x != gi);
+        self.z_pref.insert(0, gi);
+    }
+
     pub fn cell_w(&self) -> i32 {
         CONTENT_W + self.settings.col_gap.clamp(0, 48)
     }
@@ -352,6 +510,9 @@ impl App {
                 manual_w: 0,
                 manual_h: 0,
                 manual_ord: false,
+                hidden: false,
+                title_show: true,
+                scroll_y: 0,
             });
 
             let mut app = App {
@@ -365,6 +526,10 @@ impl App {
                 in_size_move: false,
                 z_pause: false,
                 rez_last: None,
+                sb: None,
+                sel_multi: Vec::new(),
+                marquee: None,
+                z_pref: Vec::new(),
                 settle_left: 0,
                 hover: 0,
                 rs: None,
@@ -412,6 +577,7 @@ impl App {
     }
 
     pub fn refresh_from_disk(&mut self) {
+        self.clear_sel();
         self.refresh_items();
         self.warm_icons();
         self.render_all();
@@ -422,10 +588,11 @@ impl App {
     pub fn layout_group(&mut self, gi: usize) {
         let cw = self.cell_w();
         let ch = self.cell_h();
+        let gt = self.grid_top(gi);
         // 手动调整过大小:以手动尺寸为准(下限保证放下至少一格)
         if self.groups[gi].user_size {
             let min_w = 2 * PAD + cw;
-            let min_h = GRID_TOP + ch + BOTTOM_PAD;
+            let min_h = gt + ch + BOTTOM_PAD;
             let max_w = (self.work.right - self.work.left) - 4;
             let max_h = (self.work.bottom - self.work.top) - 4;
             let g = &mut self.groups[gi];
@@ -434,13 +601,16 @@ impl App {
             g.panel_w = w;
             g.panel_h = h;
             g.cols = ((w - 2 * PAD) / cw).max(1);
-            g.rows = ((h - GRID_TOP - BOTTOM_PAD) / ch).max(1);
+            g.rows = ((h - gt - BOTTOM_PAD) / ch).max(1);
+            let content = ((g.items.len() as i32) + g.cols.max(1) - 1) / g.cols.max(1);
+            let m = (content - g.rows).max(0) * ch;
+            g.scroll_y = g.scroll_y.clamp(0, m);
             return;
         }
         let work = self.work;
         let n = self.groups[gi].items.len() as i32;
         let max_panel_h = (work.bottom - work.top) - 2 * MARGIN - 8;
-        let rows_max = ((max_panel_h - GRID_TOP - BOTTOM_PAD) / ch).max(1);
+        let rows_max = ((max_panel_h - gt - BOTTOM_PAD) / ch).max(1);
         let mut cols = if n == 0 {
             2
         } else {
@@ -450,11 +620,13 @@ impl App {
         let cols_max = (((work.right - work.left) - 2 * MARGIN - 2 * PAD) / cw).max(2);
         cols = cols.min(cols_max);
         let rows = if n == 0 { 1 } else { (n + cols - 1) / cols };
+        let m = (((n + cols - 1) / cols) - rows).max(0) * ch;
         let g = &mut self.groups[gi];
         g.cols = cols;
         g.rows = rows;
         g.panel_w = PAD * 2 + cols * cw;
-        g.panel_h = GRID_TOP + rows * ch + BOTTOM_PAD;
+        g.panel_h = gt + rows * ch + BOTTOM_PAD;
+        g.scroll_y = g.scroll_y.clamp(0, m);
     }
 
     // ---------- 流式摆位(仅未保存过位置的组) ----------
@@ -562,6 +734,7 @@ impl App {
         }
         self.groups.push(Group::empty(title));
         self.surfaces.push(None);
+        self.z_pref.push(self.groups.len() - 1);
         self.place_groups();
         self.save_config();
         self.groups.len() - 1
@@ -605,6 +778,12 @@ impl App {
         self.groups.remove(gi);
         if gi < self.surfaces.len() {
             self.surfaces.remove(gi);
+        }
+        self.z_pref.retain(|&x| x != gi);
+        for x in self.z_pref.iter_mut() {
+            if *x > gi {
+                *x -= 1;
+            }
         }
         for v in self.overrides.values_mut() {
             if *v > gi {
@@ -666,13 +845,10 @@ impl App {
     }
 
     // ---------- 配置 ----------
-    pub fn load_config(&mut self) {
-        let Ok(text) = std::fs::read_to_string(&self.config_path) else {
-            return;
-        };
-        let lines: Vec<String> = text.lines().map(str::to_string).collect();
+    /// 旧版 config.cfg 行解析(迁移用)
+    fn apply_config_lines(&mut self, lines: &[String]) {
         // 第一遍:面板列表(g 行)先落地,后续行的 gi 才有效
-        for line in &lines {
+        for line in lines {
             let parts: Vec<&str> = line.split('\t').collect();
             if let ["g", g, title] = parts.as_slice() {
                 if let Ok(gi) = g.parse::<usize>() {
@@ -688,7 +864,7 @@ impl App {
                 }
             }
         }
-        for line in &lines {
+        for line in lines {
             let parts: Vec<&str> = line.split('\t').collect();
             match parts.as_slice() {
                 ["m", g, key] => {
@@ -700,15 +876,22 @@ impl App {
                     let v = val.parse::<i32>().unwrap_or(0);
                     match *key {
                         "frosted" => self.settings.frosted = v != 0,
-                        "radius" => self.settings.radius = v.clamp(0, 32),
+                        "radius" => self.settings.radius = v.clamp(0, 64),
                         "tidy" => self.settings.auto_tidy = v != 0,
                         "grid" => {
                             self.settings.snap_grid = if v <= 0 { 0 } else { v.clamp(4, 64) }
                         }
                         "colgap" => self.settings.col_gap = v.clamp(0, 48),
                         "rowgap" => self.settings.row_gap = v.clamp(0, 40),
+                        "showtitle" => self.settings.show_title = v != 0,
                         _ => {}
                     }
+                }
+                ["zo", list] => {
+                    self.z_pref = list
+                        .split(',')
+                        .filter_map(|x| x.parse::<usize>().ok())
+                        .collect();
                 }
                 ["mo", g] => {
                     if let Ok(gi) = g.parse::<usize>() {
@@ -768,68 +951,195 @@ impl App {
         }
     }
 
-    pub fn save_config(&self) {
-        let mut out = String::from("rdesktop-config-1\n");
-        // 面板列表与标题(置于最前,便于加载时先落地动态面板)
-        for (gi, g) in self.groups.iter().enumerate() {
-            let t: String = g.title.chars().filter(|c| !matches!(c, '\t' | '\n' | '\r')).collect();
-            out.push_str(&format!("g\t{}\t{}\n", gi, t));
-            out.push_str(&format!("ta\t{}\t{}\n", gi, g.title_align));
+    pub fn load_config(&mut self) {
+        use crate::regstore as rs;
+        // 迁移:注册表尚无数据而旧 config.cfg 存在 → 按旧格式应用并写入注册表
+        if rs::get_dw("panels").is_none() {
+            if let Ok(text) = std::fs::read_to_string(&self.config_path) {
+                let lines: Vec<String> = text.lines().map(str::to_string).collect();
+                self.apply_config_lines(&lines);
+                self.save_config();
+                // 此刻 groups 还没有条目,itemmap 需直接从 overrides 写出,
+                // 否则用户的图标分组记录会在迁移中丢失
+                let mm: Vec<String> = self
+                    .overrides
+                    .iter()
+                    .map(|(k, gi)| format!("{}	{}", k, gi))
+                    .collect();
+                rs::set_multi("itemmap", &mm);
+            }
+            return;
         }
-        for gi in 0..self.groups.len() {
-            for it in &self.groups[gi].items {
-                if it.rule as usize != gi {
-                    out.push_str(&format!("m\t{}\t{}\n", gi, it.key));
+        // 全局设置
+        if let Some(v) = rs::get_dw("frosted") {
+            self.settings.frosted = v != 0;
+        }
+        if let Some(v) = rs::get_dw("radius") {
+            self.settings.radius = (v as i32).clamp(0, 64);
+        }
+        if let Some(v) = rs::get_dw("tidy") {
+            self.settings.auto_tidy = v != 0;
+        }
+        if let Some(v) = rs::get_dw("grid") {
+            let v = v as i32;
+            self.settings.snap_grid = if v <= 0 { 0 } else { v.clamp(4, 64) };
+        }
+        if let Some(v) = rs::get_dw("colgap") {
+            self.settings.col_gap = (v as i32).clamp(0, 48);
+        }
+        if let Some(v) = rs::get_dw("rowgap") {
+            self.settings.row_gap = (v as i32).clamp(0, 40);
+        }
+        if let Some(v) = rs::get_dw("showtitle") {
+            self.settings.show_title = v != 0;
+        }
+        if let Some(zl) = rs::get_sz("zopref") {
+            self.z_pref = zl.split(',').filter_map(|x| x.parse::<usize>().ok()).collect();
+        }
+        // 面板数量 + 每面板状态
+        let n = rs::get_dw("panels").unwrap_or(4) as usize;
+        while self.groups.len() < n {
+            let idx = self.groups.len();
+            self.groups.push(Group::empty(format!(
+                "新面板{}",
+                idx.saturating_sub(3)
+            )));
+            self.surfaces.push(None);
+        }
+        for gi in 0..self.groups.len().min(n) {
+            let p = format!("p{gi}.");
+            if let Some(t) = rs::get_sz(&format!("{p}title")) {
+                self.groups[gi].title = t;
+            }
+            if let Some(v) = rs::get_dw(&format!("{p}talign")) {
+                self.groups[gi].title_align = (v as u8).min(2);
+            }
+            if let Some(v) = rs::get_dw(&format!("{p}x")) {
+                self.groups[gi].gx = v as i32;
+            }
+            if let Some(v) = rs::get_dw(&format!("{p}y")) {
+                self.groups[gi].gy = v as i32;
+            }
+            if let Some(v) = rs::get_dw(&format!("{p}userpos")) {
+                self.groups[gi].user_pos = v != 0;
+            }
+            if let Some(v) = rs::get_dw(&format!("{p}usersize")) {
+                self.groups[gi].user_size = v != 0;
+            }
+            if let Some(v) = rs::get_dw(&format!("{p}w")) {
+                self.groups[gi].manual_w = v as i32;
+            }
+            if let Some(v) = rs::get_dw(&format!("{p}h")) {
+                self.groups[gi].manual_h = v as i32;
+            }
+            if let Some(v) = rs::get_dw(&format!("{p}ztop")) {
+                self.groups[gi].z_top = v != 0;
+            }
+            if let Some(v) = rs::get_dw(&format!("{p}morder")) {
+                self.groups[gi].manual_ord = v != 0;
+            }
+            if let Some(v) = rs::get_dw(&format!("{p}hidden")) {
+                self.groups[gi].hidden = v != 0;
+            }
+            self.groups[gi].title_show = match rs::get_dw(&format!("{p}tshow")) {
+                Some(v) => v != 0,
+                None => self.settings.show_title,
+            };
+        }
+        // 条目 → 面板映射(m)
+        for line in rs::get_multi("itemmap") {
+            if let Some((key, gi)) = line.rsplit_once('\t') {
+                if let Ok(g) = gi.parse::<usize>() {
+                    self.overrides.insert(key.to_string(), g.min(3));
                 }
             }
         }
-        // 设置项
-        out.push_str(&format!("s\tfrosted\t{}\n", i32::from(self.settings.frosted)));
-        out.push_str(&format!("s\tradius\t{}\n", self.settings.radius));
-        out.push_str(&format!("s\ttidy\t{}\n", i32::from(self.settings.auto_tidy)));
-        out.push_str(&format!("s\tgrid\t{}\n", self.settings.snap_grid));
-        out.push_str(&format!("s\tcolgap\t{}\n", self.settings.col_gap));
-        out.push_str(&format!("s\trowgap\t{}\n", self.settings.row_gap));
-        // 手动序标记 + 需要持久化的组顺序
-        //  oi:手动排序过的组,或"自动整理关闭"时的全部组(保持旧版本行为)
+        // 手动/持久化顺序(oi)
         for gi in 0..self.groups.len() {
-            if self.groups[gi].manual_ord {
-                out.push_str(&format!("mo\t{}\n", gi));
+            let keys = rs::get_multi(&format!("order{gi}"));
+            if !keys.is_empty() {
+                self.saved_order.insert(gi, keys);
             }
         }
+    }
+
+    pub fn save_config(&self) {
+        use crate::regstore as rs;
+        // 全局设置
+        rs::set_dw("frosted", i32::from(self.settings.frosted) as u32);
+        rs::set_dw("radius", self.settings.radius as u32);
+        rs::set_dw("tidy", i32::from(self.settings.auto_tidy) as u32);
+        rs::set_dw("grid", self.settings.snap_grid as u32);
+        rs::set_dw("colgap", self.settings.col_gap as u32);
+        rs::set_dw("rowgap", self.settings.row_gap as u32);
+        rs::set_dw("showtitle", i32::from(self.settings.show_title) as u32);
+        let low_all: Vec<usize> = (0..self.groups.len())
+            .filter(|&g| !self.groups[g].z_top)
+            .collect();
+        rs::set_sz(
+            "zopref",
+            &self
+                .want_order(&low_all)
+                .iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+        // 面板(先读旧数量,写完后清理超出的旧值)
+        let old_n = rs::get_dw("panels").unwrap_or(0) as usize;
+        rs::set_dw("panels", self.groups.len() as u32);
+        for (gi, g) in self.groups.iter().enumerate() {
+            let p = format!("p{gi}.");
+            let t: String = g
+                .title
+                .chars()
+                .filter(|c| !matches!(c, '\t' | '\n' | '\r'))
+                .collect();
+            rs::set_sz(&format!("{p}title"), &t);
+            rs::set_dw(&format!("{p}talign"), g.title_align as u32);
+            rs::set_dw(&format!("{p}x"), g.gx as u32);
+            rs::set_dw(&format!("{p}y"), g.gy as u32);
+            rs::set_dw(&format!("{p}userpos"), i32::from(g.user_pos) as u32);
+            rs::set_dw(&format!("{p}usersize"), i32::from(g.user_size) as u32);
+            rs::set_dw(&format!("{p}w"), g.panel_w as u32);
+            rs::set_dw(&format!("{p}h"), g.panel_h as u32);
+            rs::set_dw(&format!("{p}ztop"), i32::from(g.z_top) as u32);
+            rs::set_dw(&format!("{p}morder"), i32::from(g.manual_ord) as u32);
+            rs::set_dw(&format!("{p}hidden"), i32::from(g.hidden) as u32);
+            rs::set_dw(&format!("{p}tshow"), i32::from(g.title_show) as u32);
+        }
+        for i in (self.groups.len() as u32)..(old_n as u32) {
+            for suffix in [
+                "title", "talign", "x", "y", "userpos", "usersize", "w", "h", "ztop", "morder",
+                "hidden", "tshow",
+            ] {
+                rs::del(&format!("p{i}.{suffix}"));
+            }
+            rs::del(&format!("order{i}"));
+        }
+        // 条目 → 面板映射(m)
+        let mut mm: Vec<String> = Vec::new();
+        for (gi, g) in self.groups.iter().enumerate() {
+            for it in &g.items {
+                if it.rule as usize != gi {
+                    mm.push(format!("{}\t{}", it.key, gi));
+                }
+            }
+        }
+        rs::set_multi("itemmap", &mm);
+        // 手动/持久化顺序(oi):手动排序过的组,或"自动整理关闭"时的全部组
         for gi in 0..self.groups.len() {
             let persist = self.groups[gi].manual_ord || !self.settings.auto_tidy;
             if !persist {
                 continue;
             }
-            let mut line = format!("oi\t{}\t", gi);
-            for it in &self.groups[gi].items {
-                line.push_str(&it.key);
-                line.push('\t');
-            }
-            out.push_str(&line);
-            out.push('\n');
+            let keys: Vec<String> = self.groups[gi]
+                .items
+                .iter()
+                .map(|i| i.key.clone())
+                .collect();
+            rs::set_multi(&format!("order{gi}"), &keys);
         }
-        for gi in 0..self.groups.len() {
-            out.push_str(&format!("z\t{}\t{}\n", gi, i32::from(self.groups[gi].z_top)));
-        }
-        for gi in 0..self.groups.len() {
-            let g = &self.groups[gi];
-            if g.user_size {
-                out.push_str(&format!("q\t{}\t{}\t{}\n", gi, g.panel_w, g.panel_h));
-            }
-        }
-        for gi in 0..self.groups.len() {
-            let g = &self.groups[gi];
-            out.push_str(&format!(
-                "p\t{}\t{}\t{}\t{}\n",
-                gi,
-                g.gx,
-                g.gy,
-                if g.user_pos { 1 } else { 0 }
-            ));
-        }
-        let _ = std::fs::write(&self.config_path, out);
     }
 
     // ---------- 命中测试(客户区坐标) ----------
@@ -861,12 +1171,13 @@ impl App {
         let n = self.groups[gi].items.len() as i32;
         let cols = self.groups[gi].cols.max(1);
         let rows = (n + cols - 1) / cols;
-        let need = GRID_TOP + rows * ch + BOTTOM_PAD;
+        let gt = self.grid_top(gi);
+        let need = gt + rows * ch + BOTTOM_PAD;
         let max_h = (self.work.bottom - self.work.top) - 4;
         let cur = self.groups[gi].panel_h;
         let g = &mut self.groups[gi];
         g.user_size = true;
-        g.manual_h = need.max(cur).clamp(min_h_const(ch), max_h);
+        g.manual_h = need.max(cur).clamp(min_h_const(gt, ch), max_h);
         g.manual_w = g.panel_w;
         self.save_config();
     }
@@ -878,11 +1189,11 @@ impl App {
         let ch = self.cell_h();
         let px = x - MARGIN;
         let py = y - MARGIN;
-        if px < PAD || py < GRID_TOP {
+        if px < PAD || py < self.grid_top(gi) {
             return None;
         }
         let col = (px - PAD) / cw;
-        let row = (py - GRID_TOP) / ch;
+        let row = (py - self.grid_top(gi) + g.scroll_y) / ch;
         if col < 0 || col >= g.cols || row < 0 || row >= g.rows {
             return None;
         }
@@ -895,16 +1206,16 @@ impl App {
         let ch = self.cell_h();
         let px = x - MARGIN;
         let py = y - MARGIN;
-        if px < PAD || py < GRID_TOP {
+        if px < PAD || py < self.grid_top(gi) {
             return None;
         }
         let col = (px - PAD) / cw;
-        let row = (py - GRID_TOP) / ch;
+        let row = (py - self.grid_top(gi) + g.scroll_y) / ch;
         if col < 0 || col >= g.cols || row < 0 || row >= g.rows {
             return None;
         }
         let inx = (px - PAD) % cw;
-        let iny = (py - GRID_TOP) % ch;
+        let iny = (py - self.grid_top(gi) + g.scroll_y) % ch;
         if inx > cw || iny > ch {
             return None;
         }
@@ -924,7 +1235,7 @@ impl App {
         let row = (idx as i32) / g.cols;
         (
             MARGIN + PAD + col * cw + (cw - ICON_SZ) / 2,
-            MARGIN + GRID_TOP + row * ch + ICON_TOP,
+            MARGIN + self.grid_top(gi) + row * ch + ICON_TOP - self.groups[gi].scroll_y,
         )
     }
 }
