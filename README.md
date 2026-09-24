@@ -1,5 +1,7 @@
 # rdesktop — Windows 桌面分组管理工具(Rust + Win32 API)
 
+[English](README_EN.md) | 中文
+
 ![rdesktop](icon_preview.png)
 
 接管系统桌面图标的显示:隐藏原来的 `SysListView32` 桌面图标层,改用 **半透明、圆角、带柔和阴影的分组面板** 重新呈现桌面内容,支持面板间自由拖拽、框选与多选、单面板图层/标题/隐藏控制,状态全部持久化于注册表。
