@@ -52,7 +52,31 @@ def panels():
     return [p for p in find('RdGroupPanel')
             if not (user32.GetWindowLongPtrW(ct.c_void_p(p), -20) & 0x20)]
 
+def snap(hwnd):
+    r = w.RECT(); user32.GetWindowRect(ct.c_void_p(hwnd), ct.byref(r))
+    W, H = r.right - r.left, r.bottom - r.top
+    hdc = user32.GetDC(0); mem = gdi32.CreateCompatibleDC(hdc)
+    class BMIH(ct.Structure):
+        _fields_ = [('biSize', u32), ('biWidth', ct.c_int32), ('biHeight', ct.c_int32),
+                    ('biPlanes', ct.c_uint16), ('biBitCount', ct.c_uint16), ('biCompression', u32),
+                    ('biSizeImage', u32), ('biXPelsPerMeter', ct.c_int32), ('biYPelsPerMeter', ct.c_int32),
+                    ('biClrUsed', u32), ('biClrImportant', u32)]
+    class BMI(ct.Structure):
+        _fields_ = [('h', BMIH), ('c', u32 * 3)]
+    bmi = BMI(); bmi.h.biSize = ct.sizeof(BMIH); bmi.h.biWidth = W; bmi.h.biHeight = -H
+    bmi.h.biPlanes = 1; bmi.h.biBitCount = 32
+    bits = ct.c_void_p()
+    hbm = gdi32.CreateDIBSection(mem, ct.byref(bmi), 0, ct.byref(bits), None, 0)
+    old = gdi32.SelectObject(mem, hbm)
+    user32.PrintWindow(hwnd, mem, 2)
+    data = ct.string_at(bits.value, W * H * 4)
+    gdi32.SelectObject(mem, old); gdi32.DeleteObject(hbm); gdi32.DeleteDC(mem)
+    user32.ReleaseDC(0, hdc)
+    return Image.frombuffer('RGBA', (W, H), data, 'raw', 'BGRA', 0, 1)
+
 def shot(hwnd, path):
+    snap(hwnd).save(path)
+    return path
     r = w.RECT(); user32.GetWindowRect(ct.c_void_p(hwnd), ct.byref(r))
     W, H = r.right - r.left, r.bottom - r.top
     hdc = user32.GetDC(0); mem = gdi32.CreateCompatibleDC(hdc)
@@ -80,8 +104,10 @@ def attrib(path, plus):
     flag = '+H' if plus else '-H'
     return subprocess.run(['attrib', flag, path], capture_output=True).returncode == 0
 
+PUB = os.path.join('C:' + os.sep, 'Users', 'Public', 'Desktop')
 real_before = os.listdir(DESK)
-hidden = []      # 我们加了 H 的条目
+pub_before = [e for e in os.listdir(PUB) if not e.lower().startswith('desktop.ini')]
+hidden = []      # 我们加了 H 的条目(用户桌面 + 公共桌面)
 created = []     # 我们创建的测试条目
 ok_all = True
 try:
@@ -94,7 +120,10 @@ try:
             break
         hidden.append(name)
     assert ok_all, 'hide incomplete, abort before touching desktop further'
-    print('hidden real items:', len(hidden))
+    for name in pub_before:
+        attrib(os.path.join(PUB, name), True)
+        hidden.append('PUBLIC::' + name)
+    print('hidden real items:', len(hidden), '(+public %d)' % len(pub_before))
 
     # 2) 测试内容
     os.makedirs(os.path.join(DESK, '测试文件夹A'), exist_ok=True)
@@ -134,14 +163,42 @@ try:
 
     # 3) 重启 + 截图
     kill(); time.sleep(1)
+    if os.path.isdir(SHOTS):
+        shutil.rmtree(SHOTS)
     os.makedirs(SHOTS, exist_ok=True)
     start(); time.sleep(5)
-    ps = sorted(panels())
-    print('panels:', len(ps))
-    assert len(ps) >= 4, 'panels not up'
-    names = ['folders', 'files', 'shortcuts', 'extras', 'custom1', 'custom2']
-    for i, p in enumerate(ps):
-        nm = names[i] if i < len(names) else ('panel%d' % i)
+    # 面板按注册表 p{i}.x 从左到右命名;空面板(中心无内容)跳过
+    import winreg
+    k = winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Software\\rdesktop')
+    order = []
+    for gi in range(20):
+        try:
+            x = winreg.QueryValueEx(k, 'p%d.x' % gi)[0]
+            t = winreg.QueryValueEx(k, 'p%d.title' % gi)[0]
+            order.append((x, gi, t))
+        except FileNotFoundError:
+            break
+    order.sort()
+    x_to_gi = {x: (gi, t) for x, gi, t in order}
+    named = []
+    for p in panels():
+        r = w.RECT(); user32.GetWindowRect(ct.c_void_p(p), ct.byref(r))
+        gx = r.left + 26
+        gi_title = x_to_gi.get(gx)
+        if not gi_title:
+            continue
+        img = snap(p).convert('RGB')
+        W, H = img.size
+        center = img.crop((60, 120, max(61, W - 60), max(121, H - 60)))
+        pxs = list(center.getdata())
+        ink = sum(1 for rr, gg, bb in pxs if min(rr, gg, bb) > 70)
+        if ink < 400:
+            print('skip empty panel gi=%s' % gi_title[0])
+            continue
+        named.append((p, gi_title[1]))
+    tmap = {'文件夹': 'folders', '文件': 'files', '快捷方式': 'shortcuts', '其他快捷功能': 'extras'}
+    for p, t in named:
+        nm = tmap.get(t, 'panel-' + t)
         shot(p, os.path.join(SHOTS, 'panel-%s.png' % nm))
         print('shot panel-%s.png' % nm)
     user32.PostMessageW(ct.c_void_p(ps[0]), 0x8002, 0, 0)
@@ -167,7 +224,10 @@ finally:
         except Exception as e:
             print('test cleanup fail:', name, e)
     for name in hidden:
-        attrib(os.path.join(DESK, name), False)
+        if name.startswith('PUBLIC::'):
+            attrib(os.path.join(PUB, name.split('PUBLIC::', 1)[1]), False)
+        else:
+            attrib(os.path.join(DESK, name), False)
     after = os.listdir(DESK)
     restored = sorted(after) == sorted(real_before)
     print('desktop restored:', 'PASS' if restored else 'FAIL',
