@@ -649,6 +649,25 @@ pub fn ensure_z_order(app: &App) {
                     ));
                 }
             }
+            // Win+D 后 shell 抬升壁纸层(Progman)到普通带顶,与面板的 HWND_TOP
+            // 兜底形成震荡。此步把 shell 压到最底面板之下,一次性终结竞争:
+            // 无论 shell 刚才把 Progman 抬到哪儿,这里强制归位到面板之下。
+            if let Some(sh) = a.shell {
+                if let Some(&last_gi) = want.last() {
+                    let lh = app.groups[last_gi].hwnd;
+                    if !lh.is_invalid() {
+                        let _ = SetWindowPos(
+                            sh,
+                            Some(lh),
+                            0,
+                            0,
+                            0,
+                            0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                        );
+                    }
+                }
+            }
         }
         if acted {
             let post = walk_anchor(app);
