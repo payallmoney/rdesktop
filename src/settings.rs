@@ -13,7 +13,7 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-use crate::app::{ws, App, Settings, MARGIN};
+use crate::app::{ws, App, MARGIN};
 
 const SETTINGS_CLASS: PCWSTR = w!("RdSettingsWnd");
 
@@ -22,8 +22,7 @@ const IDC_FROST: i32 = 201;
 const IDC_RADIUS: i32 = 202;
 const IDC_TIDY: i32 = 203;
 const IDC_GRID: i32 = 204;
-const IDC_OK: i32 = 207;
-const IDC_CANCEL: i32 = 208;
+const TID_APPLY: usize = 3; // 数字输入防抖定时器
 const IDC_CGAP: i32 = 205; // 列间距
 const IDC_RGAP: i32 = 206; // 行间距
 const IDC_SHOWTITLE: i32 = 209; // (已移除对话框勾选框,保留 ID 避免冲突)
@@ -304,7 +303,7 @@ pub fn open_settings(app: &mut App) {
         let scale = app.scale;
         let s = move |v: i32| (v as f32 * scale) as i32;
         let n_rows = app.groups.len() as i32;
-        let mut rect = RECT { left: 0, top: 0, right: s(BASE_W), bottom: s(308 + 36 * n_rows) };
+        let mut rect = RECT { left: 0, top: 0, right: s(BASE_W), bottom: s(268 + 36 * n_rows) };
         let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
         let _ = AdjustWindowRectEx(&mut rect, style, false, WS_EX_DLGMODALFRAME);
         let w = rect.right - rect.left;
@@ -455,7 +454,6 @@ fn combo_get(hwnd: HWND, id: i32) -> Option<usize> {
 }
 
 unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
-    let n_pop = app.groups.len() as i32;
     let s = |v: i32| (v as f32 * app.scale) as i32;
     let chk = |style_extra: WINDOW_STYLE| {
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_extra
@@ -690,33 +688,7 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
         set_check(hwnd, IDC_PHIDE + gi as i32, !app.groups[gi].hidden); // 勾=显示面板
         set_check(hwnd, IDC_PTSHOW + gi as i32, app.groups[gi].title_show);
     }
-    // 按钮
-    mk(
-        hwnd,
-        w!("BUTTON"),
-        "确定",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_PUSHBUTTON as u32),
-        WINDOW_EX_STYLE(0),
-        s(248),
-        s(264 + n_pop * 36),
-        s(84),
-        s(30),
-        IDC_OK,
-        font,
-    );
-    mk(
-        hwnd,
-        w!("BUTTON"),
-        "取消",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_PUSHBUTTON as u32),
-        WINDOW_EX_STYLE(0),
-        s(344),
-        s(264 + n_pop * 36),
-        s(84),
-        s(30),
-        IDC_CANCEL,
-        font,
-    );
+    // (无确定/取消按钮:所有设置项均为即时生效)
 
     // 初值
     set_check(hwnd, IDC_FROST, app.settings.frosted);
@@ -743,105 +715,36 @@ fn get_i32(hwnd: HWND, id: i32) -> Option<i32> {
     }
 }
 
-// ================= 提交 =================
+// ================= 即时应用 =================
 
-unsafe fn commit(app: &mut App, hwnd: HWND) {
+/// 数字输入框防抖到期:读取并应用圆角/间距(空/非法回退旧值)
+unsafe fn apply_numbers(app: &mut App, hwnd: HWND) {
     let old = app.settings.clone();
     let radius = get_i32(hwnd, IDC_RADIUS)
         .map(|v| v.clamp(0, 64))
         .unwrap_or(old.radius);
-    let grid = combo_get(hwnd, IDC_GRID)
-        .and_then(|i| GRIDS.get(i).copied())
-        .unwrap_or(old.snap_grid);
     let col_gap = get_i32(hwnd, IDC_CGAP)
         .map(|v| v.clamp(0, 48))
         .unwrap_or(old.col_gap);
     let row_gap = get_i32(hwnd, IDC_RGAP)
         .map(|v| v.clamp(0, 40))
         .unwrap_or(old.row_gap);
-    crate::panel::dlog(&format!(
-        "settings commit radius={radius} col={col_gap} row={row_gap} grid={grid}"
-    ));
-    let new = Settings {
-        frosted: get_check(hwnd, IDC_FROST),
-        radius,
-        auto_tidy: get_check(hwnd, IDC_TIDY),
-        snap_grid: grid,
-        col_gap,
-        row_gap,
-        show_title: true, // per-panel title_show 为唯一控制
-    };
-    // 每个面板的图层
-    let mut z_top = vec![false; app.groups.len()];
-    for gi in 0..app.groups.len() {
-        z_top[gi] = combo_get(hwnd, IDC_Z0 + gi as i32)
-            .map(|i| i == 1)
-            .unwrap_or(app.groups[gi].z_top);
+    if radius == old.radius && col_gap == old.col_gap && row_gap == old.row_gap {
+        return;
     }
-    let z_changed = (0..app.groups.len()).any(|gi| app.groups[gi].z_top != z_top[gi]);
-    let n_g = app.groups.len();
-    let mut p_show = vec![true; n_g];
-    let mut p_title = vec![false; n_g];
-    for gi in 0..n_g {
-        p_show[gi] = get_check(hwnd, IDC_PHIDE + gi as i32);   // 勾=显示
-        p_title[gi] = get_check(hwnd, IDC_PTSHOW + gi as i32);
-    }
-    let hide_changed = (0..n_g).any(|gi| app.groups[gi].hidden == p_show[gi]); // 隐藏!=显示
-    let title_changed = (0..n_g).any(|gi| app.groups[gi].title_show != p_title[gi]);
-
-    app.settings = new.clone();
-    for gi in 0..app.groups.len() {
-        app.groups[gi].z_top = z_top[gi];
-    }
-    for gi in 0..n_g {
-        // 显示开关:应用(hidden = 非勾选)
-        if app.groups[gi].hidden == p_show[gi] {
-            app.groups[gi].hidden = !p_show[gi];
-            let h = app.groups[gi].hwnd;
-            if !h.is_invalid() {
-                if p_show[gi] {
-                    if app.groups_visible {
-                        let _ = ShowWindow(h, SW_RESTORE);
-                        app.render_panel(gi);
-                    }
-                } else {
-                    let _ = ShowWindow(h, SW_HIDE);
-                }
-            }
-        }
-        // 标题开关:该面板布局收窄/恢复
-        app.groups[gi].title_show = p_title[gi];
-    }
-    if title_changed {
-        app.place_groups();
-        app.render_all();
-    }
-    if hide_changed {
-        crate::panel::ensure_z_order(app);
-    }
+    app.settings.radius = radius;
+    app.settings.col_gap = col_gap;
+    app.settings.row_gap = row_gap;
     app.save_config();
-
-    if new.show_title != old.show_title || new.col_gap != old.col_gap || new.row_gap != old.row_gap {
+    if col_gap != old.col_gap || row_gap != old.row_gap {
         // 间距变化:重新流式摆位 + 全量重绘
         app.place_groups();
-        app.render_all();
-    } else if new.auto_tidy != old.auto_tidy {
-        if new.auto_tidy {
-            // 重新开启自动整理:清空手动序,回到自动排序
-            app.saved_order.clear();
-            for gi in 0..app.groups.len() {
-                app.groups[gi].manual_ord = false;
-            }
-        }
-        // 重新按新规则排布并渲染
-        app.refresh_from_disk();
-    } else if new.radius != old.radius || new.frosted != old.frosted {
-        app.render_all();
     }
+    app.render_all();
     apply_frosted(app);
-    if z_changed {
-        crate::panel::ensure_z_order(app);
-    }
+    crate::panel::dlog(&format!(
+        "settings live radius={radius} col={col_gap} row={row_gap}"
+    ));
 }
 
 /// 启用/禁用各面板的 DWM 毛玻璃(模糊区域 = 面板圆角矩形)
@@ -914,12 +817,24 @@ unsafe extern "system" fn settings_wndproc(
             let code = ((wparam.0 >> 16) & 0xFFFF) as u32;
             if code == BN_CLICKED {
                 match id {
-                    IDC_OK => {
-                        commit(app, hwnd);
-                        let _ = DestroyWindow(hwnd);
+                    // 全局开关:点击立即生效
+                    IDC_FROST => {
+                        app.settings.frosted = get_check(hwnd, IDC_FROST);
+                        app.save_config();
+                        apply_frosted(app);
+                        app.render_all();
                     }
-                    IDC_CANCEL => {
-                        let _ = DestroyWindow(hwnd);
+                    IDC_TIDY => {
+                        app.settings.auto_tidy = get_check(hwnd, IDC_TIDY);
+                        app.save_config();
+                        if app.settings.auto_tidy {
+                            // 重新开启:清空手动序,回到自动排序并重排
+                            app.saved_order.clear();
+                            for gi in 0..app.groups.len() {
+                                app.groups[gi].manual_ord = false;
+                            }
+                            app.refresh_from_disk();
+                        }
                     }
                     // 每面板「隐藏」「标题」勾选:点击立即生效并保存
                     // (不必依赖“确定”;点 X 关闭同样已生效)
@@ -966,6 +881,47 @@ unsafe extern "system" fn settings_wndproc(
                     _ => {}
                 }
             }
+            // 非点击通知:下拉选择、输入变化 → 立即生效
+            match id {
+                IDC_GRID if code == CBN_SELCHANGE => {
+                    if let Some(i) = combo_get(hwnd, IDC_GRID) {
+                        if let Some(&g) = GRIDS.get(i) {
+                            if app.settings.snap_grid != g {
+                                app.settings.snap_grid = g;
+                                app.save_config();
+                            }
+                        }
+                    }
+                }
+                IDC_RADIUS | IDC_CGAP | IDC_RGAP if code == EN_CHANGE => {
+                    // 输入停顿 400ms 后应用,避免每个按键都重排
+                    let _ = SetTimer(Some(hwnd), TID_APPLY, 400, None);
+                }
+                x if (IDC_Z0..IDC_Z0 + 100).contains(&x) && code == CBN_SELCHANGE => {
+                    let gi = (x - IDC_Z0) as usize;
+                    if gi < app.groups.len() {
+                        let top = combo_get(hwnd, x)
+                            .map(|i| i == 1)
+                            .unwrap_or(app.groups[gi].z_top);
+                        if app.groups[gi].z_top != top {
+                            app.groups[gi].z_top = top;
+                            app.save_config();
+                            crate::panel::ensure_z_order(app);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            LRESULT(0)
+        }
+        WM_TIMER => {
+            if wparam.0 == TID_APPLY {
+                let _ = KillTimer(Some(hwnd), TID_APPLY);
+                if !app_ptr.is_null() {
+                    apply_numbers(&mut *app_ptr, hwnd);
+                }
+                return LRESULT(0);
+            }
             LRESULT(0)
         }
         WM_CLOSE => {
@@ -973,8 +929,10 @@ unsafe extern "system" fn settings_wndproc(
             LRESULT(0)
         }
         WM_DESTROY => {
-            // 注意:关闭设置不能退出整个程序
+            // 注意:关闭设置不能退出整个程序;关闭前应用输入框里未到期的改动
             if !app_ptr.is_null() {
+                let _ = KillTimer(Some(hwnd), TID_APPLY);
+                apply_numbers(&mut *app_ptr, hwnd);
                 (*app_ptr).settings_hwnd = HWND::default();
             }
             LRESULT(0)
