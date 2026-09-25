@@ -40,7 +40,8 @@ pub const IDM_TOGGLE_ORIG: usize = 1003;
 pub const IDM_EXIT: usize = 1004;
 pub const IDM_OPEN: usize = 1101;
 pub const IDM_SETTINGS: usize = 1010;
-pub const IDM_AUTORUN: usize = 1011; // 开机自启动(HKCU Run 键)
+pub const IDM_AUTORUN: usize = 1011;
+pub const IDM_LOCK: usize = 1012; // 锁定布局 // 开机自启动(HKCU Run 键)
 pub const IDM_PHIDE: usize = 2000; // +gi 隐藏面板
 pub const IDM_PSHOW: usize = 2100; // +gi 托盘重显面板
 pub const IDM_PTITLE: usize = 2200; // +gi 每面板显示标题开
@@ -244,6 +245,7 @@ pub struct App {
     pub name_hwnd: HWND,
     pub name_target: Option<usize>,
     pub exiting: bool,
+    pub locked: bool,
     pub in_panel_destroy: bool,
     pub in_size_move: bool,
     pub z_pause: bool,
@@ -525,6 +527,7 @@ impl App {
                 name_hwnd: HWND::default(),
                 name_target: None,
                 exiting: false,
+                locked: false,
                 in_panel_destroy: false,
                 in_size_move: false,
                 z_pause: false,
@@ -996,6 +999,9 @@ impl App {
         if let Some(v) = rs::get_dw("showtitle") {
             self.settings.show_title = v != 0;
         }
+        if let Some(v) = rs::get_dw("locked") {
+            self.locked = v != 0;
+        }
         if let Some(zl) = rs::get_sz("zopref") {
             self.z_pref = zl.split(',').filter_map(|x| x.parse::<usize>().ok()).collect();
         }
@@ -1076,6 +1082,7 @@ impl App {
         rs::set_dw("colgap", self.settings.col_gap as u32);
         rs::set_dw("rowgap", self.settings.row_gap as u32);
         rs::set_dw("showtitle", i32::from(self.settings.show_title) as u32);
+        rs::set_dw("locked", i32::from(self.locked) as u32);
         let low_all: Vec<usize> = (0..self.groups.len())
             .filter(|&g| !self.groups[g].z_top)
             .collect();

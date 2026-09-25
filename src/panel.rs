@@ -18,7 +18,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use crate::app::{
     ws, App, IDM_AUTORUN, IDM_EXIT, IDM_OPEN, IDM_REFRESH, IDM_SETTINGS, IDM_TOGGLE_GROUPS,
     IDM_TOGGLE_ORIG, BOTTOM_PAD, ICON_SZ, ICON_TOP, MARGIN, PAD, TIMER_ZORDER,
-    HOVER_TITLE, IDM_PHIDE, IDM_PDEL, IDM_PALGN, IDM_PNEW, IDM_PRENAME, IDM_PSHOW, IDM_PTITLE,
+    HOVER_TITLE, IDM_LOCK, IDM_PHIDE, IDM_PDEL, IDM_PALGN, IDM_PNEW, IDM_PRENAME, IDM_PSHOW, IDM_PTITLE,
     WM_OPEN_SETTINGS, WM_TRAY, WM_Z_PAUSE, WM_Z_REZ, DRAG_THRESHOLD,
 };
 use crate::desktop;
@@ -341,6 +341,9 @@ pub fn compute_anchor(app: &App) -> (Option<HWND>, Option<HWND>) {
 
 /// 边缘缩放热区(客户区坐标,落在阴影带内):返回 HT* 作为区域标识,0=非热区
 fn edge_zone(gi: usize, app: &App, x: i32, y: i32) -> u32 {
+    if app.locked {
+        return 0;
+    }
     let g = &app.groups[gi];
     let cw = g.panel_w + 2 * MARGIN;
     let chh = g.panel_h + 2 * MARGIN;
@@ -1250,6 +1253,10 @@ unsafe extern "system" fn panel_wndproc(
                             app.raise_pref(gi);
                             dlog(&format!("title raise gi={gi} pref={:?}", app.z_pref));
                         }
+                        // 锁定时跳过 mv 启动(不可拖动面板)
+                        if app.locked {
+                            return LRESULT(0);
+                        }
                         let mut wr = RECT::default();
                         let _ = GetWindowRect(hwnd, &mut wr);
                         let sp = lparam_screen(hwnd, lparam);
@@ -1841,7 +1848,11 @@ unsafe extern "system" fn panel_wndproc(
                     let _ = PostMessageW(Some(hwnd), WM_OPEN_SETTINGS, WPARAM(0), LPARAM(0));
                 }
                 IDM_REFRESH => app.refresh_from_disk(),
-                IDM_TOGGLE_GROUPS => {
+                IDM_LOCK => {
+                    app.locked = !app.locked;
+                    app.save_config();
+                }
+                                IDM_TOGGLE_GROUPS => {
                     app.groups_visible = !app.groups_visible;
                     for gi in 0..app.groups.len() {
                         if !app.groups[gi].hwnd.is_invalid() {
