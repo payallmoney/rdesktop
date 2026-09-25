@@ -911,6 +911,8 @@ pub fn show_panel_menu(app: &mut App, gi: usize, hwnd: HWND, x: i32, y: i32) {
         };
         let _ = AppendMenuW(menu, MF_STRING | ts, IDM_PTITLE + gi, PCWSTR(ws(crate::lang::t("show_title")).as_ptr()));
         let _ = AppendMenuW(menu, MF_STRING, IDM_PHIDE + gi, PCWSTR(ws(crate::lang::t("hide_panel")).as_ptr()));
+        let lk1 = if app.locked { MF_CHECKED } else { MF_UNCHECKED };
+        let _ = AppendMenuW(menu, MF_STRING | lk1, IDM_LOCK, PCWSTR(ws(crate::lang::t("lock_layout")).as_ptr()));
         if gi >= 4 {
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
             let _ = AppendMenuW(menu, MF_STRING, IDM_PDEL + gi, PCWSTR(ws(crate::lang::t("delete_panel")).as_ptr()));
