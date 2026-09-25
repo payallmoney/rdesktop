@@ -1124,7 +1124,7 @@ unsafe extern "system" fn panel_wndproc(
                 return LRESULT(HTCLIENT as isize);
             }
             if px >= 0 && py >= 0 && px < pw && py < ph {
-                if py < th {
+                if py < th && !app.locked {
                     // 标题栏 = 移动热区(光标由 WM_SETCURSOR 统一给出)
                     if app.hover != HOVER_TITLE {
                         dlog("hover -> TITLE");
@@ -1630,7 +1630,7 @@ unsafe extern "system" fn panel_wndproc(
                 set_cursor_sizeall();
                 return LRESULT(TRUE.0 as isize);
             }
-            if app.hover == HOVER_TITLE {
+            if app.hover == HOVER_TITLE && !app.locked {
                 if let Ok(c) = LoadCursorW(None, IDC_SIZEALL) {
                     SetCursor(Some(c));
                 }
