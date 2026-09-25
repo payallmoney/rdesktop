@@ -975,6 +975,8 @@ pub fn show_tray_menu(app: &mut App) {
             MF_UNCHECKED
         };
         let _ = AppendMenuW(menu, MF_STRING | ar, IDM_AUTORUN, PCWSTR(ws(crate::lang::t("autostart")).as_ptr()));
+        let lk = if app.locked { MF_CHECKED } else { MF_UNCHECKED };
+        let _ = AppendMenuW(menu, MF_STRING | lk, IDM_LOCK, PCWSTR(ws(crate::lang::t("lock_layout")).as_ptr()));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         let _ = AppendMenuW(menu, MF_STRING, IDM_EXIT, PCWSTR(ws(crate::lang::t("exit")).as_ptr()));
 
