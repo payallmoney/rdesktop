@@ -68,6 +68,7 @@
 - **Win+D 防护** — 事件驱动 + 幂等锚定 + 锚点黑名单回退链,面板不消失
 - **开机自启动** — 托盘勾选,写入 HKCU Run
 - **注册表持久化** — 全部状态存 `HKCU\Software\rdesktop`,无需管理员
+- **中英双语** — 默认跟随系统语言,托盘/右键菜单可随时切换,未改名的默认面板同步翻译
 - **托盘图标** — 设置 / 刷新 / 显示隐藏 / 自启动 / 退出恢复
 
 **外观**
@@ -139,6 +140,7 @@ Hides the system desktop icon layer (`SysListView32`) and re-presents desktop co
 - **Win+D resistant** — event-driven + idempotent anchoring + anchor blacklist fallback chain
 - **Auto-start on boot** — tray checkbox, writes HKCU Run
 - **Registry persistence** — `HKCU\Software\rdesktop`, no admin required
+- **Bilingual UI** — follows system language by default; switch anytime from the tray / right-click menu; untouched default panel titles translate too
 - **Tray icon** — Settings / Refresh / Show-Hide / Auto-start / Exit & restore
 
 **Appearance**
