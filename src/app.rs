@@ -42,6 +42,7 @@ pub const IDM_OPEN: usize = 1101;
 pub const IDM_SETTINGS: usize = 1010;
 pub const IDM_AUTORUN: usize = 1011;
 pub const IDM_LOCK: usize = 1012; // 锁定布局 // 开机自启动(HKCU Run 键)
+pub const IDM_LANG: usize = 1013; // 切换语言(中文/English)
 pub const IDM_PHIDE: usize = 2000; // +gi 隐藏面板
 pub const IDM_PSHOW: usize = 2100; // +gi 托盘重显面板
 pub const IDM_PTITLE: usize = 2200; // +gi 每面板显示标题开
@@ -1068,6 +1069,19 @@ impl App {
             let keys = rs::get_multi(&format!("order{gi}"));
             if !keys.is_empty() {
                 self.saved_order.insert(gi, keys);
+            }
+        }
+    }
+
+    /// 切换语言后,把未改名的默认组标题同步成新语言
+    pub fn retitle_defaults(&mut self) {
+        let keys = ["grp_folders", "grp_files", "grp_shortcuts", "grp_extras", "new_panel_name"];
+        for g in self.groups.iter_mut() {
+            for k in keys {
+                if g.title == crate::lang::zh(k) || g.title == crate::lang::en(k) {
+                    g.title = crate::lang::t(k).to_string();
+                    break;
+                }
             }
         }
     }

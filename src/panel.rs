@@ -18,7 +18,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use crate::app::{
     ws, App, IDM_AUTORUN, IDM_EXIT, IDM_OPEN, IDM_REFRESH, IDM_SETTINGS, IDM_TOGGLE_GROUPS,
     IDM_TOGGLE_ORIG, BOTTOM_PAD, ICON_SZ, ICON_TOP, MARGIN, PAD, TIMER_ZORDER,
-    HOVER_TITLE, IDM_LOCK, IDM_PHIDE, IDM_PDEL, IDM_PALGN, IDM_PNEW, IDM_PRENAME, IDM_PSHOW, IDM_PTITLE,
+    HOVER_TITLE, IDM_LOCK, IDM_LANG, IDM_PHIDE, IDM_PDEL, IDM_PALGN, IDM_PNEW, IDM_PRENAME, IDM_PSHOW, IDM_PTITLE,
     WM_OPEN_SETTINGS, WM_TRAY, WM_Z_PAUSE, WM_Z_REZ, DRAG_THRESHOLD,
 };
 use crate::desktop;
@@ -939,6 +939,7 @@ pub fn show_panel_menu(app: &mut App, gi: usize, hwnd: HWND, x: i32, y: i32) {
             MF_UNCHECKED
         };
         let _ = AppendMenuW(menu, MF_STRING | ar, IDM_AUTORUN, PCWSTR(ws(crate::lang::t("autostart")).as_ptr()));
+        let _ = AppendMenuW(menu, MF_STRING, IDM_LANG, PCWSTR(ws(crate::lang::t("lang_switch")).as_ptr()));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         let _ = AppendMenuW(menu, MF_STRING, IDM_EXIT, PCWSTR(ws(crate::lang::t("exit")).as_ptr()));
         keybd_alt();
@@ -961,7 +962,7 @@ pub fn show_tray_menu(app: &mut App) {
                     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
                     any_hidden = true;
                 }
-                let t = ws(&format!("显示面板:{}", g.title));
+                let t = ws(&format!("{}{}", crate::lang::t("show_panel"), g.title));
                 let _ = AppendMenuW(menu, MF_STRING, IDM_PSHOW + gi, PCWSTR(t.as_ptr()));
             }
         }
@@ -977,6 +978,7 @@ pub fn show_tray_menu(app: &mut App) {
             MF_UNCHECKED
         };
         let _ = AppendMenuW(menu, MF_STRING | ar, IDM_AUTORUN, PCWSTR(ws(crate::lang::t("autostart")).as_ptr()));
+        let _ = AppendMenuW(menu, MF_STRING, IDM_LANG, PCWSTR(ws(crate::lang::t("lang_switch")).as_ptr()));
         let lk = if app.locked { MF_CHECKED } else { MF_UNCHECKED };
         let _ = AppendMenuW(menu, MF_STRING | lk, IDM_LOCK, PCWSTR(ws(crate::lang::t("lock_layout")).as_ptr()));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
@@ -1028,8 +1030,8 @@ pub fn tray_add(app: &mut App) {
         nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_INFO;
         nid.uCallbackMessage = WM_TRAY;
         nid.hIcon = icon;
-        copy_wstr(&mut nid.szTip, "rdesktop · 桌面分组管理");
-        copy_wstr(&mut nid.szInfo, "已接管桌面图标:拖拽图标可在分组间移动,右键托盘退出");
+        copy_wstr(&mut nid.szTip, &format!("rdesktop · {}", crate::lang::t("tray_tip")));
+        copy_wstr(&mut nid.szInfo, crate::lang::t("tray_info"));
         copy_wstr(&mut nid.szInfoTitle, "rdesktop");
         nid.dwInfoFlags = NIIF_INFO;
         if Shell_NotifyIconW(NIM_ADD, &nid).as_bool() {
@@ -1889,6 +1891,17 @@ unsafe extern "system" fn panel_wndproc(
                     // 注册表即开关状态:读取现值取反写回
                     let on = !desktop::autorun_enabled();
                     desktop::autorun_set(on);
+                }
+                IDM_LANG => {
+                    crate::lang::set_lang(crate::lang::get_lang() ^ 1);
+                    crate::lang::persist();
+                    app.retitle_defaults();
+                    app.save_config();
+                    app.render_all();
+                    // 设置窗口还是旧语言文案:关闭它,重开即新语言
+                    if !app.settings_hwnd.is_invalid() {
+                        let _ = PostMessageW(Some(app.settings_hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+                    }
                 }
                 IDM_EXIT => {
                     PostQuitMessage(0);

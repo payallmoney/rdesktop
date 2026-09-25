@@ -36,13 +36,18 @@ const IDC_PTSHOW: i32 = 350; // 每面板显示标题勾选:350+gi(避开 PHIDE 
 // 圆角档位 / 对齐网格档位(与下拉顺序一一对应)
 const GRIDS: [i32; 4] = [0, 8, 16, 32];
 
-const GRID_LABELS: [&str; 4] = ["关闭", "8 像素", "16 像素", "32 像素"];
+fn grid_labels() -> [&'static str; 4] {
+    [crate::lang::t("grid_off"), crate::lang::t("grid8"),
+     crate::lang::t("grid16"), crate::lang::t("grid32")]
+}
 
 const BASE_W: i32 = 440;
 const BASE_H: i32 = 418;
 
 // 图层选项(每个面板)
-const LAYER_LABELS: [&str; 2] = ["最低层(桌面之上,不遮挡应用)", "最高层(置顶显示)"];
+fn layer_labels() -> [&'static str; 2] {
+    [crate::lang::t("layer_low"), crate::lang::t("layer_high")]
+}
 
 pub unsafe fn register_class(hinst: HINSTANCE) -> bool {
     let wc = WNDCLASSEXW {
@@ -139,7 +144,7 @@ pub fn open_rename(app: &mut App, gi: usize) {
         let ptr = app as *mut App;
         let Some(hinst) = module_handle() else { return };
         crate::panel::dlog("rename: hinst ok");
-        let title = ws("重命名面板");
+        let title = ws(crate::lang::t("rename_title"));
         let hwnd = match CreateWindowExW(
             WS_EX_DLGMODALFRAME,
             NAME_CLASS,
@@ -190,8 +195,8 @@ pub fn open_rename(app: &mut App, gi: usize) {
             Err(e) => crate::panel::dlog(&format!("rename: edit ERR {e}")),
         }
         crate::panel::dlog("rename: mk1 begin");
-        let _ = mk(hwnd, w!("BUTTON"), "确定", WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_PUSHBUTTON as u32), WINDOW_EX_STYLE(0), s(206), s(64), s(74), s(30), BTN_RNAME_OK, font);
-        let _ = mk(hwnd, w!("BUTTON"), "取消", WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_PUSHBUTTON as u32), WINDOW_EX_STYLE(0), s(290), s(64), s(74), s(30), BTN_RNAME_CANCEL, font);
+        let _ = mk(hwnd, w!("BUTTON"), crate::lang::t("ok"), WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_PUSHBUTTON as u32), WINDOW_EX_STYLE(0), s(206), s(64), s(74), s(30), BTN_RNAME_OK, font);
+        let _ = mk(hwnd, w!("BUTTON"), crate::lang::t("cancel"), WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_PUSHBUTTON as u32), WINDOW_EX_STYLE(0), s(290), s(64), s(74), s(30), BTN_RNAME_CANCEL, font);
         crate::panel::dlog("rename: controls ok");
         crate::panel::dlog("rename: buttons ok");
         let _ = ShowWindow(hwnd, SW_SHOW);
@@ -317,7 +322,7 @@ pub fn open_settings(app: &mut App) {
             crate::panel::dlog("settings: GetModuleHandle failed");
             return;
         };
-        let title = ws("桌面管理");
+        let title = ws(crate::lang::t("app_name"));
         let hwnd = match CreateWindowExW(
             WS_EX_DLGMODALFRAME,
             SETTINGS_CLASS,
@@ -464,7 +469,7 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
     mk(
         hwnd,
         w!("BUTTON"),
-        "毛玻璃(面板背景模糊)",
+        crate::lang::t("frosted"),
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
         WINDOW_EX_STYLE(0),
         s(16),
@@ -478,7 +483,7 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
     mk(
         hwnd,
         w!("STATIC"),
-        "圆角(px)",
+        crate::lang::t("radius"),
         WS_CHILD | WS_VISIBLE,
         WINDOW_EX_STYLE(0),
         s(16),
@@ -507,7 +512,7 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
     mk(
         hwnd,
         w!("BUTTON"),
-        "自动整理(自动分组、按名称排序、桌面变化自动刷新)",
+        crate::lang::t("auto_tidy"),
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
         WINDOW_EX_STYLE(0),
         s(16),
@@ -521,7 +526,7 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
     mk(
         hwnd,
         w!("STATIC"),
-        "对齐",
+        crate::lang::t("grid_snap"),
         WS_CHILD | WS_VISIBLE,
         WINDOW_EX_STYLE(0),
         s(16),
@@ -548,7 +553,7 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
     mk(
         hwnd,
         w!("STATIC"),
-        "列间距(px)",
+        crate::lang::t("col_gap"),
         WS_CHILD | WS_VISIBLE,
         WINDOW_EX_STYLE(0),
         s(16),
@@ -575,7 +580,7 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
     mk(
         hwnd,
         w!("STATIC"),
-        "行间距(px)",
+        crate::lang::t("row_gap"),
         WS_CHILD | WS_VISIBLE,
         WINDOW_EX_STYLE(0),
         s(200),
@@ -602,7 +607,7 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
     mk(
         hwnd,
         w!("STATIC"),
-        "拖动面板松手后,位置吸附到所选网格",
+        crate::lang::t("hint_grid"),
         WS_CHILD | WS_VISIBLE,
         WINDOW_EX_STYLE(0),
         s(16),
@@ -616,7 +621,7 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
     mk(
         hwnd,
         w!("STATIC"),
-        "每个面板:图层 / 显示 / 标题",
+        crate::lang::t("per_panel_hdr"),
         WS_CHILD | WS_VISIBLE,
         WINDOW_EX_STYLE(0),
         s(16),
@@ -654,7 +659,7 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
             font,
         );
         if let Some(cb) = cb {
-            combo_add(cb, &LAYER_LABELS);
+            combo_add(cb, &layer_labels());
             let idx = if app.groups[gi].z_top { 1 } else { 0 };
             let _ = SendMessageW(cb, CB_SETCURSEL, Some(WPARAM(idx)), None);
         }
@@ -662,7 +667,7 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
         mk(
             hwnd,
             w!("BUTTON"),
-            "显示",
+            crate::lang::t("show"),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
             WINDOW_EX_STYLE(0),
             s(300),
@@ -675,7 +680,7 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
         mk(
             hwnd,
             w!("BUTTON"),
-            "标题",
+            crate::lang::t("title"),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
             WINDOW_EX_STYLE(0),
             s(364),
@@ -694,7 +699,7 @@ unsafe fn populate(app: &App, hwnd: HWND, font: HFONT) {
     set_check(hwnd, IDC_FROST, app.settings.frosted);
     set_check(hwnd, IDC_TIDY, app.settings.auto_tidy);
     if let Some(cb) = cb_g {
-        combo_add(cb, &GRID_LABELS);
+        combo_add(cb, &grid_labels());
         let idx = GRIDS.iter().position(|&g| g == app.settings.snap_grid).unwrap_or(0);
         let _ = SendMessageW(cb, CB_SETCURSEL, Some(WPARAM(idx)), None);
     }

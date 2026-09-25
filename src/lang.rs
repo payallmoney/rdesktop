@@ -56,6 +56,17 @@ pub fn zh(key: &str) -> &'static str {
         "grp_shortcuts" => "快捷方式",
         "grp_extras" => "其他快捷功能",
         "new_panel_name" => "新面板",
+        "app_name" => "桌面管理",
+        "lang_switch" => "English",
+        "tray_tip" => "桌面分组管理",
+        "tray_info" => "已接管桌面图标:拖拽图标可在分组间移动,右键托盘退出",
+        "show" => "显示",
+        "title" => "标题",
+        "hint_grid" => "拖动面板松手后,位置吸附到所选网格",
+        "grid_off" => "关闭",
+        "grid8" => "8 像素",
+        "grid16" => "16 像素",
+        "grid32" => "32 像素",
         _ => "",
     }
 }
@@ -77,11 +88,11 @@ pub fn en(key: &str) -> &'static str {
         "delete_panel" => "Delete panel(&D)",
         "show_panel" => "Show panel:",
         "frosted" => "Frosted glass (DWM blur)",
-        "radius" => "Corner radius (px)",
+        "radius" => "Radius",
         "auto_tidy" => "Auto-tidy (group by type, sort by name, auto-refresh)",
         "grid_snap" => "Grid snap",
-        "col_gap" => "Column gap (px)",
-        "row_gap" => "Row gap (px)",
+        "col_gap" => "Col gap",
+        "row_gap" => "Row gap",
         "per_panel_hdr" => "Per panel: layer / show / title",
         "layer_low" => "Low layer (above desktop, below apps)",
         "layer_high" => "High layer (topmost)",
@@ -94,8 +105,38 @@ pub fn en(key: &str) -> &'static str {
         "grp_shortcuts" => "Shortcuts",
         "grp_extras" => "Quick Actions",
         "new_panel_name" => "New Panel",
+        "app_name" => "Desktop Manager",
+        "lang_switch" => "中文",
+        "tray_tip" => "Desktop group manager",
+        "tray_info" => "Desktop icons are managed in panels. Drag icons between groups; right-click the tray icon to exit.",
+        "show" => "Show",
+        "title" => "Title",
+        "hint_grid" => "Panels snap to the selected grid when dropped",
+        "grid_off" => "Off",
+        "grid8" => "8 px",
+        "grid16" => "16 px",
+        "grid32" => "32 px",
         _ => "",
     }
+}
+
+/// 启动时读取持久化语言;无记录按系统 UI 语言探测
+pub fn load_persisted() {
+    match crate::regstore::get_dw("lang") {
+        Some(v) => set_lang(if v != 0 { LANG_EN } else { LANG_ZH }),
+        None => set_lang(detect_lang()),
+    }
+}
+
+pub fn persist() {
+    crate::regstore::set_dw("lang", get_lang() as u32);
+}
+
+/// 是否为任一语言下的默认组名(切语言时同步翻译未改名的组)
+pub fn is_default_title(s: &str) -> bool {
+    ["grp_folders", "grp_files", "grp_shortcuts", "grp_extras", "new_panel_name"]
+        .iter()
+        .any(|k| s == zh(k) || s == en(k))
 }
 
 pub fn group_title(gi: usize) -> &'static str {
