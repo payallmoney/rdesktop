@@ -1482,12 +1482,17 @@ unsafe extern "system" fn panel_wndproc(
                         mq.active = true;
                     }
                 }
+                let mut moved = false;
                 if mq.active {
                     mq.x1 = p.x;
                     mq.y1 = p.y;
-                    app.render_panel(mq.gi);
+                    moved = true;
                 }
-                app.marquee = Some(mq);
+                let mq_gi = mq.gi;
+                app.marquee = Some(mq); // 先放回再渲染:渲染期间要能读到选框(take 后渲染是画不出的)
+                if moved {
+                    app.render_panel(mq_gi);
+                }
                 return LRESULT(0);
             }
             if app.mouse.down.is_some() {
