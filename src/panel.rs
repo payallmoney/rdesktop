@@ -18,7 +18,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use crate::app::{
     ws, App, IDM_AUTORUN, IDM_EXIT, IDM_OPEN, IDM_REFRESH, IDM_SETTINGS, IDM_TOGGLE_GROUPS,
     IDM_TOGGLE_ORIG, BOTTOM_PAD, ICON_SZ, ICON_TOP, MARGIN, PAD, TIMER_ZORDER,
-    HOVER_TITLE, IDM_LOCK, IDM_LANG, IDM_PHIDE, IDM_PDEL, IDM_PALGN, IDM_PNEW, IDM_PRENAME, IDM_PSHOW, IDM_PTITLE,
+    HOVER_TITLE, IDM_ICONSZ, IDM_LOCK, IDM_LANG, IDM_PHIDE, IDM_PDEL, IDM_PALGN, IDM_PNEW, IDM_PRENAME, IDM_PSHOW, IDM_PTITLE,
     WM_OPEN_SETTINGS, WM_TRAY, WM_Z_PAUSE, WM_Z_REZ, DRAG_THRESHOLD,
 };
 use crate::desktop;
@@ -940,6 +940,17 @@ pub fn show_panel_menu(app: &mut App, gi: usize, hwnd: HWND, x: i32, y: i32) {
         };
         let _ = AppendMenuW(menu, MF_STRING | ar, IDM_AUTORUN, PCWSTR(ws(crate::lang::t("autostart")).as_ptr()));
         let _ = AppendMenuW(menu, MF_STRING, IDM_LANG, PCWSTR(ws(crate::lang::t("lang_switch")).as_ptr()));
+        // 图标大小子菜单(档位见 IDM_ICONSZ 分发)
+        if let Ok(sub_is) = CreatePopupMenu() {
+            let sz_pcts = [75i32, 100, 125, 150, 200];
+            let sz_keys = ["is_small", "is_std", "is_large", "is_xl", "is_huge"];
+            for (i, pct) in sz_pcts.iter().enumerate() {
+                let chk = if app.icon_pct == *pct { MF_CHECKED } else { MF_UNCHECKED };
+                let lbl = ws(&format!("{} ({}%)", crate::lang::t(sz_keys[i]), pct));
+                let _ = AppendMenuW(sub_is, MF_STRING | chk, IDM_ICONSZ + i, PCWSTR(lbl.as_ptr()));
+            }
+            let _ = AppendMenuW(menu, MF_POPUP, sub_is.0 as usize, PCWSTR(ws(crate::lang::t("icon_size")).as_ptr()));
+        }
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         let _ = AppendMenuW(menu, MF_STRING, IDM_EXIT, PCWSTR(ws(crate::lang::t("exit")).as_ptr()));
         keybd_alt();
@@ -979,6 +990,17 @@ pub fn show_tray_menu(app: &mut App) {
         };
         let _ = AppendMenuW(menu, MF_STRING | ar, IDM_AUTORUN, PCWSTR(ws(crate::lang::t("autostart")).as_ptr()));
         let _ = AppendMenuW(menu, MF_STRING, IDM_LANG, PCWSTR(ws(crate::lang::t("lang_switch")).as_ptr()));
+        // 图标大小子菜单(档位见 IDM_ICONSZ 分发)
+        if let Ok(sub_is) = CreatePopupMenu() {
+            let sz_pcts = [75i32, 100, 125, 150, 200];
+            let sz_keys = ["is_small", "is_std", "is_large", "is_xl", "is_huge"];
+            for (i, pct) in sz_pcts.iter().enumerate() {
+                let chk = if app.icon_pct == *pct { MF_CHECKED } else { MF_UNCHECKED };
+                let lbl = ws(&format!("{} ({}%)", crate::lang::t(sz_keys[i]), pct));
+                let _ = AppendMenuW(sub_is, MF_STRING | chk, IDM_ICONSZ + i, PCWSTR(lbl.as_ptr()));
+            }
+            let _ = AppendMenuW(menu, MF_POPUP, sub_is.0 as usize, PCWSTR(ws(crate::lang::t("icon_size")).as_ptr()));
+        }
         let lk = if app.locked { MF_CHECKED } else { MF_UNCHECKED };
         let _ = AppendMenuW(menu, MF_STRING | lk, IDM_LOCK, PCWSTR(ws(crate::lang::t("lock_layout")).as_ptr()));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
@@ -1901,6 +1923,26 @@ unsafe extern "system" fn panel_wndproc(
                     // 设置窗口还是旧语言文案:关闭它,重开即新语言
                     if !app.settings_hwnd.is_invalid() {
                         let _ = PostMessageW(Some(app.settings_hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+                    }
+                }
+                x if (IDM_ICONSZ..IDM_ICONSZ + 8).contains(&x) => {
+                    let pcts = [75i32, 100, 125, 150, 200];
+                    if let Some(&p) = pcts.get(x - IDM_ICONSZ) {
+                        if app.icon_pct != p {
+                            let old = app.icon_pct.clamp(50, 200);
+                            app.icon_pct = p;
+                            // 手动尺寸面板:窗口随图标比例同步缩放(之后仍可再手动调整)
+                            let ratio = p as f32 / old as f32;
+                            for g in app.groups.iter_mut() {
+                                if g.user_size {
+                                    g.manual_w = (g.manual_w as f32 * ratio).round() as i32;
+                                    g.manual_h = (g.manual_h as f32 * ratio).round() as i32;
+                                }
+                            }
+                            app.place_groups(); // layout_group 内更新 panel_w
+                            app.save_config(); // 布局后再持久化,写的是新尺寸
+                            app.render_all();
+                        }
                     }
                 }
                 IDM_EXIT => {

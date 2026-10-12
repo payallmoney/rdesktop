@@ -214,7 +214,7 @@ impl App {
         let label: String = self.groups[src_gi].items[idx].name.clone();
         let icon_key: String = self.groups[src_gi].items[idx].key.clone();
         let gw = self.cell_w();
-        let gh = ICON_TOP + ICON_SZ + 30;
+        let gh = self.icon_top() + self.icon_sz() + 30;
         let bw = gw + 2 * MARGIN;
         let bh = gh + 2 * MARGIN;
 
@@ -467,7 +467,7 @@ impl App {
                         left: cx + 2.0,
                         top: cy,
                         right: cx + cw as f32 - 2.0,
-                        bottom: cy + ICON_TOP as f32 + ICON_SZ as f32 + 26.0,
+                        bottom: cy + self.icon_top() as f32 + self.icon_sz() as f32 + 26.0,
                     };
                     let rr = D2D1_ROUNDED_RECT { rect: sel, radiusX: 8.0, radiusY: 8.0 };
                     let geo = self.d2d.CreateRoundedRectangleGeometry(&rr)?;
@@ -477,7 +477,7 @@ impl App {
 
                 // 图标(必要时补进缓存)
                 let key = &g.items[idx].key;
-                let icon_x = cx + (cw - ICON_SZ) as f32 / 2.0;
+                let icon_x = cx + (cw - self.icon_sz()) as f32 / 2.0;
                 let icon_y = cy + ICON_TOP as f32;
                 let opacity = if is_drag_src { 0.35 } else { 1.0 };
                 // 缓存缺失则由调用方保证已填充;此处仅读取
@@ -489,8 +489,8 @@ impl App {
                         let dest = D2D_RECT_F {
                             left: icon_x,
                             top: icon_y,
-                            right: icon_x + ICON_SZ as f32,
-                            bottom: icon_y + ICON_SZ as f32,
+                            right: icon_x + self.icon_sz() as f32,
+                            bottom: icon_y + self.icon_sz() as f32,
                         };
                         let _ = rt.DrawBitmap(
                             &bmp,
@@ -505,8 +505,8 @@ impl App {
                     let ph = D2D_RECT_F {
                         left: icon_x,
                         top: icon_y,
-                        right: icon_x + ICON_SZ as f32,
-                        bottom: icon_y + ICON_SZ as f32,
+                        right: icon_x + self.icon_sz() as f32,
+                        bottom: icon_y + self.icon_sz() as f32,
                     };
                     let rr = D2D1_ROUNDED_RECT { rect: ph, radiusX: 10.0, radiusY: 10.0 };
                     let geo = self.d2d.CreateRoundedRectangleGeometry(&rr)?;
@@ -521,7 +521,7 @@ impl App {
                         &ch,
                         icon_x,
                         icon_y + 10.0,
-                        ICON_SZ as f32,
+                        self.icon_sz() as f32,
                         26.0,
                         &lb,
                         false,
@@ -536,7 +536,7 @@ impl App {
                     &self.fmt_label,
                     &g.items[idx].name,
                     cx + 4.0,
-                    cy + ICON_TOP as f32 + ICON_SZ as f32 + 5.0,
+                    cy + self.icon_top() as f32 + self.icon_sz() as f32 + 5.0,
                     (cw - 8) as f32,
                     20.0,
                     &label_brush,
@@ -561,7 +561,7 @@ impl App {
                                 left: hx,
                                 top: hy,
                                 right: hx + (cw - 4) as f32,
-                                bottom: hy + (ICON_TOP + ICON_SZ + 26) as f32,
+                                bottom: hy + (self.icon_top() + self.icon_sz() + 26) as f32,
                             },
                             radiusX: 8.0,
                             radiusY: 8.0,
@@ -699,7 +699,7 @@ impl App {
             let border = rt.CreateSolidColorBrush(&color(0.35, 0.65, 1.0, 0.9), None)?;
             rt.DrawGeometry(&geo, &border, 1.5, None);
 
-            let icon_x = (MARGIN + (gw - ICON_SZ) / 2) as f32;
+            let icon_x = (MARGIN + (gw - self.icon_sz()) / 2) as f32;
             let icon_y = (MARGIN + ICON_TOP) as f32;
             let cached = self.icon_cache.get(icon_key).cloned().flatten().or_else(|| {
                 crate::desktop::load_icon(&self.wic, icon_key)
@@ -709,8 +709,8 @@ impl App {
                     let dest = D2D_RECT_F {
                         left: icon_x,
                         top: icon_y,
-                        right: icon_x + ICON_SZ as f32,
-                        bottom: icon_y + ICON_SZ as f32,
+                        right: icon_x + self.icon_sz() as f32,
+                        bottom: icon_y + self.icon_sz() as f32,
                     };
                     let _ = rt.DrawBitmap(
                         &bmp,
@@ -729,7 +729,7 @@ impl App {
                 &self.fmt_label,
                 label,
                 (MARGIN + 4) as f32,
-                (MARGIN + ICON_TOP + ICON_SZ + 5) as f32,
+                (MARGIN + self.icon_top() + self.icon_sz() + 5) as f32,
                 (gw - 8) as f32,
                 20.0,
                 &lb,
