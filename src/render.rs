@@ -304,15 +304,47 @@ impl App {
         if wt.is_empty() {
             return Ok(());
         }
-        let layout: IDWriteTextLayout = dwrite.CreateTextLayout(&wt, fmt, max_w, max_h)?;
-        let _ = layout.SetTrimming(
-            &DWRITE_TRIMMING {
-                granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
-                delimiter: 0,
-                delimiterCount: 0,
-            },
-            None,
-        );
+        // 超宽省略:DWrite trimming 的 delimiter 是"保护分隔段"语义(会去保 .txt 段),
+        // 不是画点号。改为先量自然宽度,放不下则二分找能容纳 "..." 的最长前缀,手动拼省略号
+        let wide = f32::MAX / 2.0;
+        let text_w = |t: &[u16]| -> Result<f32> {
+            let mut m = windows::Win32::Graphics::DirectWrite::DWRITE_TEXT_METRICS::default();
+            dwrite.CreateTextLayout(t, fmt, wide, max_h)?.GetMetrics(&mut m)?;
+            Ok(m.width)
+        };
+        let overflows = text_w(&wt)? > max_w;
+        let draw_wt: Vec<u16> = if !overflows {
+            wt
+        } else {
+            let dots: Vec<u16> = "...".encode_utf16().collect();
+            let dots_w = text_w(&dots)?;
+            let mut lo = 0usize;
+            let mut hi = wt.len();
+            while lo < hi {
+                let mut mid = (lo + hi + 1) / 2;
+                // 不把代理对切一半
+                if mid < wt.len() && (0xDC00..0xE000).contains(&wt[mid]) {
+                    mid -= 1;
+                }
+                if mid <= lo {
+                    break;
+                }
+                let w = text_w(&wt[..mid])?;
+                if w + dots_w <= max_w {
+                    lo = mid;
+                } else {
+                    hi = mid - 1;
+                }
+            }
+            let mut n = lo;
+            while n > 0 && wt[n - 1] == b' ' as u16 {
+                n -= 1; // 省略号前不留尾部空格
+            }
+            let mut t = wt[..n].to_vec();
+            t.extend_from_slice(&dots);
+            t
+        };
+        let layout: IDWriteTextLayout = dwrite.CreateTextLayout(&draw_wt, fmt, max_w, max_h)?;
         if shadow {
             rt.DrawTextLayout(
                 Vector2 { X: x + 1.0, Y: y + 1.0 },

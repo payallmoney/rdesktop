@@ -479,8 +479,11 @@ impl App {
                     w!(""),
                 )
                 .map_err(|e| format!("字体创建失败: {e}"))?;
-            // 图标下方名称:居中
+            // 图标下方名称:居中;禁自动换行(默认 WRAP 会把长名折到不可见的第二行,
+            // 表现为只露第一个字),超宽交给 trimming 画"..."省略
             let _ = fmt_label.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            let _ = fmt_label.SetWordWrapping(windows::Win32::Graphics::DirectWrite::DWRITE_WORD_WRAPPING_NO_WRAP);
+            let _ = fmt_title.SetWordWrapping(windows::Win32::Graphics::DirectWrite::DWRITE_WORD_WRAPPING_NO_WRAP);
             let fmt_hint = dwrite
                 .CreateTextFormat(
                     w!("Microsoft YaHei UI"),
