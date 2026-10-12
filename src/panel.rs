@@ -1959,11 +1959,11 @@ unsafe extern "system" fn panel_wndproc(
                     dlog("pnew: window ok");
                     app.render_all();
                     dlog("pnew: rendered");
-                    crate::settings::open_rename(app, gi);
+                    crate::settings::open_rename(app, gi, true); // 新面板:命名弹窗居屏幕中央
                     dlog(&format!("panel new gi={gi}"));
                 }
                 x if (IDM_PRENAME..IDM_PDEL).contains(&x) => {
-                    crate::settings::open_rename(app, x - IDM_PRENAME);
+                    crate::settings::open_rename(app, x - IDM_PRENAME, false);
                 }
                 x if (IDM_PDEL..IDM_PALGN).contains(&x) => {
                     let gi = x - IDM_PDEL;

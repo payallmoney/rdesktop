@@ -89,7 +89,8 @@ const BTN_RNAME_OK: i32 = 301;
 const BTN_RNAME_CANCEL: i32 = 302;
 
 /// 打开"重命名面板"对话框(预填当前名称)
-pub fn open_rename(app: &mut App, gi: usize) {
+/// center=true 时居屏幕(工作区)中央——新增面板的命名弹窗;false 居目标面板中心
+pub fn open_rename(app: &mut App, gi: usize, center: bool) {
     if gi >= app.groups.len() {
         return;
     }
@@ -134,10 +135,16 @@ pub fn open_rename(app: &mut App, gi: usize) {
         let _ = AdjustWindowRectEx(&mut rect, style, false, WS_EX_DLGMODALFRAME);
         let w = rect.right - rect.left;
         let h = rect.bottom - rect.top;
-        // 显示在目标面板中心
-        let g = &app.groups[gi];
-        let cx = g.gx + g.panel_w / 2 - w / 2;
-        let cy = g.gy + g.panel_h / 2 - h / 2;
+        // 定位:新面板命名居屏幕(工作区)中央;重命名已有面板居该面板中心
+        let (cx, cy) = if center {
+            (
+                app.work.left + (app.work.right - app.work.left - w) / 2,
+                app.work.top + (app.work.bottom - app.work.top - h) / 2,
+            )
+        } else {
+            let g = &app.groups[gi];
+            (g.gx + g.panel_w / 2 - w / 2, g.gy + g.panel_h / 2 - h / 2)
+        };
         let x = cx.clamp(app.work.left + 8, (app.work.right - w - 8).max(app.work.left + 8));
         let y = cy.clamp(app.work.top + 8, (app.work.bottom - h - 8).max(app.work.top + 8));
 
