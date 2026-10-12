@@ -1929,18 +1929,18 @@ unsafe extern "system" fn panel_wndproc(
                     let pcts = [75i32, 100, 125, 150, 200];
                     if let Some(&p) = pcts.get(x - IDM_ICONSZ) {
                         if app.icon_pct != p {
-                            let old = app.icon_pct.clamp(50, 200);
                             app.icon_pct = p;
-                            // 手动尺寸面板:窗口随图标比例同步缩放(之后仍可再手动调整)
-                            let ratio = p as f32 / old as f32;
+                            // 面板大小与图标大小解耦:面板保持当前尺寸,内容按新格子重排
+                            // (未手动调过尺寸的面板此刻定格为当前尺寸,仍可随时拖拽调整)
                             for g in app.groups.iter_mut() {
-                                if g.user_size {
-                                    g.manual_w = (g.manual_w as f32 * ratio).round() as i32;
-                                    g.manual_h = (g.manual_h as f32 * ratio).round() as i32;
+                                if !g.user_size && g.panel_w > 0 {
+                                    g.user_size = true;
+                                    g.manual_w = g.panel_w;
+                                    g.manual_h = g.panel_h;
                                 }
                             }
-                            app.place_groups(); // layout_group 内更新 panel_w
-                            app.save_config(); // 布局后再持久化,写的是新尺寸
+                            app.place_groups(); // layout_group 内按新格宽重算行列(panel_w 不变)
+                            app.save_config();
                             app.render_all();
                         }
                     }
