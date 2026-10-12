@@ -18,7 +18,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use crate::app::{
     ws, App, IDM_AUTORUN, IDM_EXIT, IDM_OPEN, IDM_REFRESH, IDM_SETTINGS, IDM_TOGGLE_GROUPS,
     IDM_TOGGLE_ORIG, BOTTOM_PAD, ICON_SZ, ICON_TOP, MARGIN, PAD, TIMER_ZORDER,
-    HOVER_TITLE, IDM_ICONSZ, IDM_LOCK, IDM_LANG, IDM_PHIDE, IDM_PDEL, IDM_PALGN, IDM_PNEW, IDM_PRENAME, IDM_PSHOW, IDM_PTITLE,
+    HOVER_TITLE, IDM_ICONSZ, IDM_LBLW, IDM_LOCK, IDM_LANG, IDM_PHIDE, IDM_PDEL, IDM_PALGN, IDM_PNEW, IDM_PRENAME, IDM_PSHOW, IDM_PTITLE,
     WM_OPEN_SETTINGS, WM_TRAY, WM_Z_PAUSE, WM_Z_REZ, DRAG_THRESHOLD,
 };
 use crate::desktop;
@@ -951,6 +951,16 @@ pub fn show_panel_menu(app: &mut App, gi: usize, hwnd: HWND, x: i32, y: i32) {
             }
             let _ = AppendMenuW(menu, MF_POPUP, sub_is.0 as usize, PCWSTR(ws(crate::lang::t("icon_size")).as_ptr()));
         }
+        // 文字宽度子菜单(图标宽度的倍数)
+        if let Ok(sub_lw) = CreatePopupMenu() {
+            let mults = [10i32, 12, 15, 20];
+            for (i, m) in mults.iter().enumerate() {
+                let chk = if app.label_mult10 == *m { MF_CHECKED } else { MF_UNCHECKED };
+                let lbl = ws(&format!("{}×", *m as f32 / 10.0));
+                let _ = AppendMenuW(sub_lw, MF_STRING | chk, IDM_LBLW + i, PCWSTR(lbl.as_ptr()));
+            }
+            let _ = AppendMenuW(menu, MF_POPUP, sub_lw.0 as usize, PCWSTR(ws(crate::lang::t("label_width")).as_ptr()));
+        }
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         let _ = AppendMenuW(menu, MF_STRING, IDM_EXIT, PCWSTR(ws(crate::lang::t("exit")).as_ptr()));
         keybd_alt();
@@ -1000,6 +1010,16 @@ pub fn show_tray_menu(app: &mut App) {
                 let _ = AppendMenuW(sub_is, MF_STRING | chk, IDM_ICONSZ + i, PCWSTR(lbl.as_ptr()));
             }
             let _ = AppendMenuW(menu, MF_POPUP, sub_is.0 as usize, PCWSTR(ws(crate::lang::t("icon_size")).as_ptr()));
+        }
+        // 文字宽度子菜单(图标宽度的倍数)
+        if let Ok(sub_lw) = CreatePopupMenu() {
+            let mults = [10i32, 12, 15, 20];
+            for (i, m) in mults.iter().enumerate() {
+                let chk = if app.label_mult10 == *m { MF_CHECKED } else { MF_UNCHECKED };
+                let lbl = ws(&format!("{}×", *m as f32 / 10.0));
+                let _ = AppendMenuW(sub_lw, MF_STRING | chk, IDM_LBLW + i, PCWSTR(lbl.as_ptr()));
+            }
+            let _ = AppendMenuW(menu, MF_POPUP, sub_lw.0 as usize, PCWSTR(ws(crate::lang::t("label_width")).as_ptr()));
         }
         let lk = if app.locked { MF_CHECKED } else { MF_UNCHECKED };
         let _ = AppendMenuW(menu, MF_STRING | lk, IDM_LOCK, PCWSTR(ws(crate::lang::t("lock_layout")).as_ptr()));
@@ -1928,6 +1948,18 @@ unsafe extern "system" fn panel_wndproc(
                     // 设置窗口还是旧语言文案:关闭它,重开即新语言
                     if !app.settings_hwnd.is_invalid() {
                         let _ = PostMessageW(Some(app.settings_hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+                    }
+                }
+                x if (IDM_LBLW..IDM_LBLW + 8).contains(&x) => {
+                    let mults = [10i32, 12, 15, 20];
+                    if let Some(&m) = mults.get(x - IDM_LBLW) {
+                        if app.label_mult10 != m {
+                            app.label_mult10 = m;
+                            // 列宽变化:面板保持尺寸(与图标大小同样解耦),内容重排
+                            app.place_groups();
+                            app.save_config();
+                            app.render_all();
+                        }
                     }
                 }
                 x if (IDM_ICONSZ..IDM_ICONSZ + 8).contains(&x) => {

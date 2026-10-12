@@ -561,15 +561,17 @@ impl App {
                     )?;
                 }
 
-                // 标签
+                // 标签(宽度 = 图标宽 × 倍数,居中于格子;超宽自动加 "...")
+                let lw = self.content_w() as f32;
+                let lx = cx + (cw as f32 - lw) / 2.0;
                 Self::draw_text_layout(
                     &rt,
                     &self.dwrite,
                     &self.fmt_label,
                     &g.items[idx].name,
-                    cx + 4.0,
+                    lx,
                     cy + self.icon_top() as f32 + self.icon_sz() as f32 + 5.0,
-                    (cw - 8) as f32,
+                    lw,
                     20.0,
                     &label_brush,
                     true,

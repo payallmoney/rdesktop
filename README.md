@@ -69,6 +69,7 @@
 - **开机自启动** — 托盘勾选,写入 HKCU Run
 - **注册表持久化** — 全部状态存 `HKCU\Software\rdesktop`,无需管理员
 - **图标大小调节** — 托盘/右键菜单五档(75%~200%),面板大小保持不变、内容自动重排,持久化保存
+- **文字宽度调节** — 图标下方的名称文字宽度可设为图标宽度的 1.0/1.2/1.5/2.0 倍,列宽随之自适应
 - **中英双语** — 默认跟随系统语言,托盘/右键菜单可随时切换,未改名的默认面板同步翻译
 - **托盘图标** — 设置 / 刷新 / 显示隐藏 / 自启动 / 退出恢复
 
@@ -142,6 +143,7 @@ Hides the system desktop icon layer (`SysListView32`) and re-presents desktop co
 - **Auto-start on boot** — tray checkbox, writes HKCU Run
 - **Registry persistence** — `HKCU\Software\rdesktop`, no admin required
 - **Icon size control** — five levels (75%~200%) from the tray / right-click menu; panel size stays fixed while content reflows, and the choice persists
+- **Text width control** — icon label width settable to 1.0/1.2/1.5/2.0 × icon width; column layout adapts automatically
 - **Bilingual UI** — follows system language by default; switch anytime from the tray / right-click menu; untouched default panel titles translate too
 - **Tray icon** — Settings / Refresh / Show-Hide / Auto-start / Exit & restore
 

@@ -44,6 +44,7 @@ pub const IDM_AUTORUN: usize = 1011;
 pub const IDM_LOCK: usize = 1012; // 锁定布局 // 开机自启动(HKCU Run 键)
 pub const IDM_LANG: usize = 1013; // 切换语言(中文/English)
 pub const IDM_ICONSZ: usize = 1020; // +i 图标大小档位(0..4)
+pub const IDM_LBLW: usize = 1030; // +i 文字宽度档位(0..3)
 pub const IDM_PHIDE: usize = 2000; // +gi 隐藏面板
 pub const IDM_PSHOW: usize = 2100; // +gi 托盘重显面板
 pub const IDM_PTITLE: usize = 2200; // +gi 每面板显示标题开
@@ -271,6 +272,7 @@ pub struct App {
     pub last_mtime: Option<std::time::SystemTime>,
     pub scale: f32, // dpi / 96.0
     pub icon_pct: i32, // 图标大小百分比(50~200,默认 100,菜单可调)
+    pub label_mult10: i32, // 文字宽度 = 图标宽 × 倍数(10=1.0/12=1.2/15=1.5/20=2.0)
 }
 
 impl App {
@@ -416,8 +418,9 @@ impl App {
         (ICON_TOP as f32 * self.icon_scale()).round() as i32
     }
 
+    /// 格子内容宽 = 图标宽 × 文字宽度倍数(文字区与列宽由此决定)
     pub fn content_w(&self) -> i32 {
-        (CONTENT_W as f32 * self.icon_scale()).round() as i32
+        ((ICON_SZ as f32 * self.icon_scale()) * (self.label_mult10 as f32 / 10.0)).round() as i32
     }
 
     /// 内容高 = 图标上边距 + 图标 + 标签块(25 固定,文字不随图标缩放)
@@ -577,6 +580,7 @@ impl App {
                 fmt_label,
                 fmt_hint,
                 icon_pct: 100,
+                label_mult10: 10,
                 icon_cache: Default::default(),
                 surfaces: (0..4).map(|_| None).collect(),
                 ghost_surface: None,
@@ -1028,6 +1032,10 @@ impl App {
         if let Some(v) = rs::get_dw("iconpct") {
             self.icon_pct = (v as i32).clamp(50, 200);
         }
+        if let Some(v) = rs::get_dw("labelmult") {
+            let v = v as i32;
+            self.label_mult10 = if (10..=20).contains(&v) { v } else { 10 };
+        }
         if let Some(v) = rs::get_dw("showtitle") {
             self.settings.show_title = v != 0;
         }
@@ -1127,6 +1135,7 @@ impl App {
         rs::set_dw("colgap", self.settings.col_gap as u32);
         rs::set_dw("rowgap", self.settings.row_gap as u32);
         rs::set_dw("iconpct", self.icon_pct.clamp(50, 200) as u32);
+        rs::set_dw("labelmult", self.label_mult10.clamp(10, 20) as u32);
         rs::set_dw("showtitle", i32::from(self.settings.show_title) as u32);
         rs::set_dw("locked", i32::from(self.locked) as u32);
         let low_all: Vec<usize> = (0..self.groups.len())
