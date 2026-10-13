@@ -561,7 +561,9 @@ pub fn show_context_menu(hwnd: HWND, item: &crate::app::Item, x: i32, y: i32, cm
         let mut shown = false;
         let mut src = "none";
 
+        crate::panel::dlog("ctx: begin pidl bind");
         if let Some(pidl) = item_pidl(item) {
+            crate::panel::dlog("ctx: pidl ok, GetUIObjectOf...");
             // 规范绑定:真实父文件夹 + 相对子 PIDL(资源管理器同款路径),
             // 才包含 重命名/打开方式/发送到/复制文件地址 等静态动词段;
             // 旧的"桌面文件夹+绝对PIDL"会缺整段菜单。
@@ -576,6 +578,7 @@ pub fn show_context_menu(hwnd: HWND, item: &crate::app::Item, x: i32, y: i32, cm
                 Err(e) => crate::panel::dlog(&format!("ctx SHBindToParent FAIL {e}")),
             }
             if cm.is_none() {
+                crate::panel::dlog("ctx: GetUIObjectOf none, fallback desktop folder");
                 // 兜底:桌面文件夹 + 绝对 PIDL
                 if let Ok(desk) = windows::Win32::UI::Shell::SHGetDesktopFolder() {
                     let arr = [pidl as *const ITEMIDLIST];
@@ -583,7 +586,9 @@ pub fn show_context_menu(hwnd: HWND, item: &crate::app::Item, x: i32, y: i32, cm
                 }
             }
             if let Some(cm) = cm {
+                    crate::panel::dlog("ctx: QueryContextMenu enter(加载 shell 扩展,可能被第三方扩展卡住)");
                     let hr = cm.QueryContextMenu(menu, 0, 1, 0x7FFF, 0);
+                    crate::panel::dlog("ctx: QueryContextMenu done");
                     if hr.is_ok() {
                         // 默认动词加粗(与资源管理器经典菜单一致,通常是“打开”)
                         let mut def_idx: u32 = u32::MAX;

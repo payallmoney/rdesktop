@@ -56,6 +56,7 @@ pub const IDM_PALGN: usize = 1400; // +gi*4+a  标题对齐 a:0左1中2右
 pub const WM_OPEN_SETTINGS: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 2;
 pub const WM_Z_PAUSE: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 3; // 测试用:暂停 z 序维护
 pub const WM_Z_REZ: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 5; // 事件驱动:立即纠正 z 序/救回最小化
+pub const WM_WATCHDOG: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 9; // 看门狗心跳:UI 线程泵到即自增
 /// hover 状态:0=无;HOVER_TITLE=标题(移动);其余为 HTLEFT/HTRIGHT/...(缩放热区)
 pub const HOVER_TITLE: u32 = 0x1000;
 

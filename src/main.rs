@@ -107,6 +107,7 @@ fn run() -> Result<(), String> {
         return Err("注册设置窗口类失败。".into());
     }
     unsafe { panel::create_windows(&mut app, hinst) };
+    panel::spawn_watchdog(app.groups[0].hwnd);
 
     // 首次呈现
     dlog("stage: first render");

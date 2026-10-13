@@ -19,7 +19,7 @@ use crate::app::{
     ws, App, IDM_AUTORUN, IDM_EXIT, IDM_OPEN, IDM_REFRESH, IDM_SETTINGS, IDM_TOGGLE_GROUPS,
     IDM_TOGGLE_ORIG, BOTTOM_PAD, ICON_SZ, ICON_TOP, MARGIN, PAD, TIMER_ZORDER,
     HOVER_TITLE, IDM_ICONSZ, IDM_LBLW, IDM_LOCK, IDM_LANG, IDM_PHIDE, IDM_PDEL, IDM_PALGN, IDM_PNEW, IDM_PRENAME, IDM_PSHOW, IDM_PTITLE,
-    WM_OPEN_SETTINGS, WM_TRAY, WM_Z_PAUSE, WM_Z_REZ, DRAG_THRESHOLD,
+    WM_OPEN_SETTINGS, WM_TRAY, WM_WATCHDOG, WM_Z_PAUSE, WM_Z_REZ, DRAG_THRESHOLD,
 };
 use crate::desktop;
 
@@ -28,6 +28,46 @@ const TIMER_SETTLE_ID: usize = 7;
 
 /// WinEvent 投递目标:任一面板句柄(同线程消息队列)
 static Z_SINK: AtomicIsize = AtomicIsize::new(0);
+
+/// 看门狗心跳计数:UI 线程每泵到一次 WM_WATCHDOG 自增
+static UI_TICK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// UI 线程看门狗:线程被 COM/shell 调用(如第三方 shell 扩展卡住 QueryContextMenu)
+/// 阻塞时,Win+D 等事件会无声失效(表现为"面板/图标不显示"),这里写日志让现场可见
+pub fn spawn_watchdog(hwnd: HWND) {
+    let h_raw = hwnd.0 as isize;
+    std::thread::spawn(move || {
+        let hwnd = HWND(h_raw as *mut core::ffi::c_void); // HWND 非 Send,跨线程传裸值
+        let mut strikes = 0u32;
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            let before = UI_TICK.load(std::sync::atomic::Ordering::SeqCst);
+            unsafe {
+                let _ = PostMessageW(Some(hwnd), WM_WATCHDOG, WPARAM(0), LPARAM(0));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+            if UI_TICK.load(std::sync::atomic::Ordering::SeqCst) == before {
+                strikes += 1;
+                if strikes == 2 {
+                    dlog("WATCHDOG: UI 线程 ~10s 未泵消息(可能被 COM/shell 调用阻塞)");
+                } else if strikes % 12 == 0 {
+                    dlog(&format!("WATCHDOG: UI 线程已卡 ~{}s", strikes * 6));
+                }
+            } else {
+                strikes = 0;
+            }
+            // 自愈:UI 线程卡 ~60s 判定为死锁(正常操作不会让 UI 停泵这么久),
+            // 重启自身恢复桌面,避免"图标不显示"静默死亡
+            if strikes >= 10 && unsafe { IsWindow(Some(hwnd)).as_bool() } {
+                dlog("WATCHDOG: UI 线程卡 ~60s,自动重启恢复");
+                if let Ok(exe) = std::env::current_exe() {
+                    let _ = std::process::Command::new(exe).spawn();
+                }
+                std::process::exit(0);
+            }
+        }
+    });
+}
 
 /// 锚点黑名单:SetWindowPos(…, after=该窗) 返回过 E_ACCESSDENIED 的窗
 /// (如某些受保护/提权进程的窗口)。不再拿它当插入锚点,walk 也不再因它判 displaced,
@@ -1771,6 +1811,10 @@ unsafe extern "system" fn panel_wndproc(
             return LRESULT(0);
         }
 
+        WM_WATCHDOG => {
+            UI_TICK.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            LRESULT(0)
+        }
         WM_TRAY => {
             let ev = lparam.0 as u32;
             match ev {
